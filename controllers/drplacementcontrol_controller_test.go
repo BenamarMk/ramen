@@ -443,6 +443,8 @@ func updateManifestWorkStatus(clusterNamespace, mwType, workType string) {
 	err := k8sClient.Status().Update(context.TODO(), createdManifest)
 	if err != nil {
 		// try again
+		Expect(k8sClient.Get(context.TODO(), manifestLookupKey, createdManifest)).NotTo(HaveOccurred())
+		createdManifest.Status = pvManifestStatus
 		err = k8sClient.Status().Update(context.TODO(), createdManifest)
 	}
 
