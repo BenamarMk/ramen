@@ -40,7 +40,7 @@ jobs:
 
   golangci:
     name: Golangci Lint
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-21.04
     steps:
       - name: Checkout source
         uses: actions/checkout@v2
@@ -93,7 +93,7 @@ jobs:
         KUBERNETES_VERSIONS: ["1.20.2"]
     env:
       KUBERNETES_VERSION: ${{ matrix.KUBERNETES_VERSIONS }}
-      KIND_VERSION: "v0.10.0"
+      KIND_VERSION: "v0.11.1"
       KIND_CLUSTER_NAME: "sanity"
     steps:
       - name: Checkout source
