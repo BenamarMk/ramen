@@ -310,7 +310,7 @@ func updateClonedPlacementRuleStatus(
 	}
 
 	clonedPlRuleLookupKey := types.NamespacedName{
-		Name:      fmt.Sprintf("%s-%s", userPlRule.Name, drpc.Name),
+		Name:      fmt.Sprintf(controllers.ClonedPlacementRuleNameFormat, drpc.Name, drpc.Namespace),
 		Namespace: userPlRule.Namespace,
 	}
 
@@ -358,6 +358,11 @@ func createDRPC(name, namespace string) *rmn.DRPlacementControl {
 	Expect(k8sClient.Create(context.TODO(), drpc)).Should(Succeed())
 
 	return drpc
+}
+
+func deleteDRPC() {
+	drpc := getLatestDRPC(DRPCName, DRPCNamespaceName)
+	Expect(k8sClient.Delete(context.TODO(), drpc)).Should(Succeed())
 }
 
 func setDRPCSpecExpectationTo(drpc *rmn.DRPlacementControl,
@@ -720,7 +725,7 @@ var _ = Describe("DRPlacementControl Reconciler", func() {
 				updateManagedClusterViewStatusAsNotFound(mcvEast)
 				// tickle the DRPC reconciler, should be removed once we watch for MCV resource updates
 				setDRPCSpecExpectationTo(drpc, "newS3Endpoint-1", rmn.ActionFailover, "")
-				Expect(getManifestWorkCount(EastManagedCluster)).Should(Equal(2)) // MW for ROLES only
+				Expect(getManifestWorkCount(EastManagedCluster)).Should(Equal(2)) // Roles MWs
 				waitForCompletion()
 			})
 		})
@@ -741,7 +746,7 @@ var _ = Describe("DRPlacementControl Reconciler", func() {
 				Expect(getManifestWorkCount(WestManagedCluster)).Should(Equal(4)) // MWs for VRG+ROLES+PVs
 				waitForVRGMWDeletion(EastManagedCluster)
 				updateManagedClusterViewStatusAsNotFound(mcvEast)
-				Expect(getManifestWorkCount(EastManagedCluster)).Should(Equal(2)) // MWs for ROLES
+				Expect(getManifestWorkCount(EastManagedCluster)).Should(Equal(2)) // Roles MWs
 				waitForCompletion()
 			})
 		})
@@ -775,7 +780,7 @@ var _ = Describe("DRPlacementControl Reconciler", func() {
 				waitForVRGMWDeletion(WestManagedCluster)
 
 				updateManagedClusterViewStatusAsNotFound(mcvWest)
-				Expect(getManifestWorkCount(WestManagedCluster)).Should(Equal(2)) // MWs for ROLES
+				Expect(getManifestWorkCount(WestManagedCluster)).Should(Equal(2)) // Roles MWs
 				waitForCompletion()
 			})
 		})
@@ -797,7 +802,7 @@ var _ = Describe("DRPlacementControl Reconciler", func() {
 				waitForVRGMWDeletion(WestManagedCluster)
 				updateManagedClusterViewStatusAsNotFound(mcvWest)
 				Expect(getManifestWorkCount(EastManagedCluster)).Should(Equal(4)) // MWs for VRG+ROLES+PVs
-				Expect(getManifestWorkCount(WestManagedCluster)).Should(Equal(2)) // MWs for ROLES
+				Expect(getManifestWorkCount(WestManagedCluster)).Should(Equal(2)) // Roles MWs
 				waitForCompletion()
 			})
 		})
@@ -825,7 +830,7 @@ var _ = Describe("DRPlacementControl Reconciler", func() {
 				Expect(getManifestWorkCount(WestManagedCluster)).Should(Equal(4)) // MW for VRG+ROLES+PVs
 				waitForVRGMWDeletion(EastManagedCluster)
 				updateManagedClusterViewStatusAsNotFound(mcvEast)
-				Expect(getManifestWorkCount(EastManagedCluster)).Should(Equal(2)) // MWs for ROLES
+				Expect(getManifestWorkCount(EastManagedCluster)).Should(Equal(2)) // Roles MWs
 				waitForCompletion()
 			})
 		})
@@ -855,8 +860,18 @@ var _ = Describe("DRPlacementControl Reconciler", func() {
 				Expect(getManifestWorkCount(EastManagedCluster)).Should(Equal(4)) // MWs for VRG+ROLES+PVs
 				waitForVRGMWDeletion(WestManagedCluster)
 				updateManagedClusterViewStatusAsNotFound(mcvWest)
-				Expect(getManifestWorkCount(WestManagedCluster)).Should(Equal(2)) // MWs for ROLES
+				Expect(getManifestWorkCount(WestManagedCluster)).Should(Equal(2)) // Roles MWs
 				waitForCompletion()
+			})
+			When("Deleting DRPC", func() {
+				It("Should delete VRG from Primary (EastManagedCluster)", func() {
+					// ----------------------------- DELETE DRPC from PRIMARY --------------------------------------
+					By("\n\n*** DELETE DRPC ***\n\n")
+					safeToProceed = false
+					deleteDRPC()
+					waitForCompletion()
+					Expect(getManifestWorkCount(EastManagedCluster)).Should(Equal(2)) // Roles MWs
+				})
 			})
 		})
 	})
