@@ -682,6 +682,12 @@ func (d *DRPCInstance) runFailover() (bool, error) {
 	d.log.Info("Entering runFailover", "state", d.instance.Status.LastKnownDRState)
 
 	const done = true
+
+	if d.isFailbackInProgress() || d.isRelocationInProgress() {
+		return !done, fmt.Errorf("invalid state %v for the selected action %v",
+			d.instance.Status.LastKnownDRState, d.instance.Spec.Action)
+	}
+
 	// We are done if empty
 	if d.instance.Spec.FailoverCluster == "" {
 		return done, fmt.Errorf("failover cluster not set. FailoverCluster is a mandatory field")
@@ -759,11 +765,21 @@ func (d *DRPCInstance) runFailover() (bool, error) {
 func (d *DRPCInstance) runFailback() (bool, error) {
 	d.log.Info("Entering runFailback", "state", d.instance.Status.LastKnownDRState)
 
+	if d.isFailoverInProgress() || d.isRelocationInProgress() {
+		return false, fmt.Errorf("invalid state %v for the selected action %v",
+			d.instance.Status.LastKnownDRState, d.instance.Spec.Action)
+	}
+
 	return d.switchToPreferredCluster(rmn.FailingBack)
 }
 
 func (d *DRPCInstance) runRelocate() (bool, error) {
 	d.log.Info("Entering runRelocate", "state", d.instance.Status.LastKnownDRState)
+
+	if d.isFailbackInProgress() || d.isFailoverInProgress() {
+		return false, fmt.Errorf("invalid state %v for the selected action %v",
+			d.instance.Status.LastKnownDRState, d.instance.Spec.Action)
+	}
 
 	return d.switchToPreferredCluster(rmn.Relocating)
 }
@@ -1658,4 +1674,16 @@ func (d *DRPCInstance) getRequeueDuration() time.Duration {
 	}
 
 	return duration
+}
+
+func (d *DRPCInstance) isFailoverInProgress() bool {
+	return rmn.FailingOver == d.instance.Status.LastKnownDRState
+}
+
+func (d *DRPCInstance) isFailbackInProgress() bool {
+	return rmn.FailingBack == d.instance.Status.LastKnownDRState
+}
+
+func (d *DRPCInstance) isRelocationInProgress() bool {
+	return rmn.Relocating == d.instance.Status.LastKnownDRState
 }
