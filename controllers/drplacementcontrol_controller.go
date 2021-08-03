@@ -225,6 +225,7 @@ func GetConditionReason(state rmn.DRState) string {
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *DRPlacementControlReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	genPred := predicate.GenerationChangedPredicate{}
 	mwPred := ManifestWorkPredicateFunc()
 
 	mwMapFun := handler.EnqueueRequestsFromMapFunc(handler.MapFunc(func(obj client.Object) []reconcile.Request {
@@ -254,6 +255,7 @@ func (r *DRPlacementControlReconciler) SetupWithManager(mgr ctrl.Manager) error 
 
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&rmn.DRPlacementControl{}).
+		WithEventFilter(genPred).
 		Watches(&source.Kind{Type: &ocmworkv1.ManifestWork{}}, mwMapFun, builder.WithPredicates(mwPred)).
 		Watches(&source.Kind{Type: &fndv2.ManagedClusterView{}}, mcvMapFun, builder.WithPredicates(mcvPred)).
 		Complete(r)
@@ -355,7 +357,7 @@ func (r *DRPlacementControlReconciler) reconcileDRPCInstance(ctx context.Context
 	}
 
 	if requeue {
-		return ctrl.Result{Requeue: true}, nil
+		return ctrl.Result{RequeueAfter: time.Millisecond * 100}, nil
 	}
 
 	const sanityCheckDelay = 10 // for 10 mins
