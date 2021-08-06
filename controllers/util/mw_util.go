@@ -493,5 +493,10 @@ func (mwu *MWUtil) deleteManifestWork(mwName, mwNamespace string) error {
 
 	mwu.Log.Info("Deleting ManifestWork", "name", mw.Name, "namespace", mwNamespace)
 
-	return mwu.Client.Delete(mwu.Ctx, mw)
+	err = mwu.Client.Delete(mwu.Ctx, mw)
+	if !errors.IsNotFound(err) {
+		return err
+	}
+
+	return nil
 }

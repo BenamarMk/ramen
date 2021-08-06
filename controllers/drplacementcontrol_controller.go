@@ -58,12 +58,6 @@ const (
 	ClonedPlacementRuleNameFormat string = "clonedprule-%s-%s"
 )
 
-const (
-	ReasonNotReady = "NotReady"
-	ReasonReady    = "Ready"
-	ReasonUnknown  = "Unknown"
-)
-
 var ErrSameHomeCluster = errorswrapper.New("new home cluster is the same as current home cluster")
 
 type PVDownloader interface {
@@ -103,8 +97,8 @@ func ManifestWorkPredicateFunc() predicate.Funcs {
 				return false
 			}
 
-			log.Info(fmt.Sprintf("Update event for MW %s/%s: oldStatus %+v, newStatus %+v",
-				oldMW.Name, oldMW.Namespace, oldMW.Status, newMW.Status))
+			//log.Info(fmt.Sprintf("Update event for MW %s/%s: oldStatus %+v, newStatus %+v",
+			//	oldMW.Name, oldMW.Namespace, oldMW.Status, newMW.Status))
 
 			return !reflect.DeepEqual(oldMW.Status, newMW.Status)
 		},
@@ -142,8 +136,8 @@ func ManagedClusterViewPredicateFunc() predicate.Funcs {
 				return false
 			}
 
-			log.Info(fmt.Sprintf("Update event for MCV %s/%s: oldStatus %+v, newStatus %+v",
-				oldMCV.Name, oldMCV.Namespace, oldMCV.Status, newMCV.Status))
+			//log.Info(fmt.Sprintf("Update event for MCV %s/%s: oldStatus %+v, newStatus %+v",
+			//	oldMCV.Name, oldMCV.Namespace, oldMCV.Status, newMCV.Status))
 
 			return !reflect.DeepEqual(oldMCV.Status, newMCV.Status)
 		},
@@ -199,30 +193,6 @@ func GetDRPCCondition(status *rmn.DRPlacementControlStatus, conditionType string
 	return -1, nil
 }
 
-func GetConditionReason(state rmn.DRState) string {
-	switch state {
-	case rmn.Deploying:
-		fallthrough
-	case rmn.FailingBack:
-		fallthrough
-	case rmn.FailingOver:
-		fallthrough
-	case rmn.Relocating:
-		return ReasonNotReady
-
-	case rmn.Deployed:
-		fallthrough
-	case rmn.FailedOver:
-		fallthrough
-	case rmn.FailedBack:
-		fallthrough
-	case rmn.Relocated:
-		return ReasonReady
-	}
-
-	return ReasonUnknown
-}
-
 // SetupWithManager sets up the controller with the Manager.
 func (r *DRPlacementControlReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	mwPred := ManifestWorkPredicateFunc()
@@ -235,7 +205,7 @@ func (r *DRPlacementControlReconciler) SetupWithManager(mgr ctrl.Manager) error 
 			return []reconcile.Request{}
 		}
 
-		// ctrl.Log.Info(fmt.Sprintf("MapFunc for ManifestWork (%v)", mw))
+		ctrl.Log.Info(fmt.Sprintf("Filtering ManifestWork (%v)", mw))
 		return filterMW(mw)
 	}))
 
@@ -249,6 +219,7 @@ func (r *DRPlacementControlReconciler) SetupWithManager(mgr ctrl.Manager) error 
 			return []reconcile.Request{}
 		}
 
+		ctrl.Log.Info(fmt.Sprintf("Filtering MCV %v", mcv))
 		return filterMCV(mcv)
 	}))
 
@@ -344,6 +315,7 @@ func (r *DRPlacementControlReconciler) reconcileDRPCInstance(ctx context.Context
 	r.Log.Info("Finished processing", "Requeue?", requeue)
 
 	if !requeue {
+		r.Log.Info("Done -- call the callback")
 		r.Callback(d.instance.Name)
 	}
 
@@ -355,6 +327,7 @@ func (r *DRPlacementControlReconciler) reconcileDRPCInstance(ctx context.Context
 	}
 
 	if requeue {
+		r.Log.Info("Requeing No luck")
 		return ctrl.Result{Requeue: true}, nil
 	}
 
@@ -673,9 +646,23 @@ func (d *DRPCInstance) startProcessing() bool {
 
 	if d.needStatusUpdate {
 		if err := d.updateDRPCStatus(); err != nil {
-			d.log.Error(err, "failed to update status")
+			drpc := &rmn.DRPlacementControl{}
+			drpcLookupKey := types.NamespacedName{
+				Name:      d.instance.Name,
+				Namespace: d.instance.Namespace,
+			}
+			err = d.reconciler.Client.Get(d.ctx, drpcLookupKey, drpc)
+			if err != nil {
+				d.log.Error(err, "failed to update status1")
 
-			return requeue
+				return requeue
+			}
+			d.instance = drpc
+			if err = d.updateDRPCStatus(); err != nil {
+				d.log.Error(err, "failed to update status")
+
+				return requeue
+			}
 		}
 	}
 
@@ -1243,6 +1230,20 @@ func (d *DRPCInstance) isVRGPrimary(mw *ocmworkv1.ManifestWork) (bool, error) {
 func (d *DRPCInstance) ensureCleanup(clusterToSkip string) error {
 	d.log.Info("ensure cleanup on secondaries")
 
+	idx, condition := GetDRPCCondition(&d.instance.Status, rmn.ConditionReconciling)
+	d.log.Info(fmt.Sprintf("Condition %v", condition))
+	if idx == -1 {
+		return fmt.Errorf("condition not found. %v", d.instance.Status.Conditions)
+	}
+
+	if condition.Reason == rmn.ReasonSuccess && condition.Status == metav1.ConditionTrue {
+		return nil
+	}
+
+	if condition.Reason == rmn.ReasonProgressing {
+		d.updateCondition(condition, idx, rmn.ReasonCleaning, metav1.ConditionFalse)
+	}
+
 	clean, err := d.cleanup(clusterToSkip)
 	if err != nil {
 		return err
@@ -1252,7 +1253,16 @@ func (d *DRPCInstance) ensureCleanup(clusterToSkip string) error {
 		return fmt.Errorf("failed to clean secondaries")
 	}
 
+	d.updateCondition(condition, idx, rmn.ReasonSuccess, metav1.ConditionTrue)
+
 	return nil
+}
+
+func (d *DRPCInstance) updateCondition(condition *metav1.Condition, idx int, reason string, status metav1.ConditionStatus) {
+	condition.Reason = reason
+	condition.Status = status
+	d.instance.Status.Conditions[idx] = *condition
+	d.needStatusUpdate = true
 }
 
 // cleanupPVForRestore cleans up required PV fields, to ensure restore succeeds to a new cluster, and
@@ -1653,7 +1663,7 @@ func (r *DRPlacementControlReconciler) getOrCreateManagedClusterView(
 	err := r.Get(context.TODO(), types.NamespacedName{Name: meta.Name, Namespace: meta.Namespace}, mcv)
 	if err != nil {
 		if errors.IsNotFound(err) {
-			r.Log.Info("Creating ManagedClusterView", "mcv", mcv)
+			r.Log.Info(fmt.Sprintf("Creating ManagedClusterView %v", mcv))
 			err = r.Create(context.TODO(), mcv)
 		}
 
@@ -1717,42 +1727,138 @@ func (d *DRPCInstance) advanceToNextDRState() {
 	d.setDRState(nextState)
 }
 
-func (d *DRPCInstance) setDRState(state rmn.DRState) {
-	d.log.Info(fmt.Sprintf("Current State '%s'. Next State '%s'", d.getLastDRState(), state))
+func (d *DRPCInstance) setDRState(nextState rmn.DRState) {
+	if d.instance.Status.Phase != nextState {
+		d.log.Info(fmt.Sprintf("Phase: Current '%s'. Next '%s'",
+			d.instance.Status.Phase, nextState))
 
-	newCondition := metav1.Condition{
-		Type:               string(state),
-		Status:             metav1.ConditionTrue,
-		ObservedGeneration: d.getObservedGeneration(state),
-		LastTransitionTime: metav1.Now(),
-		Reason:             GetConditionReason(state),
-		Message:            fmt.Sprintf("Current state is %v", state),
+		d.instance.Status.Phase = nextState
+		d.updateConditions()
+		d.needStatusUpdate = true
 	}
-
-	d.needStatusUpdate = true
-	idx, existingCondition := GetDRPCCondition(&d.instance.Status, string(state))
-
-	switch {
-	case idx == -1:
-		d.instance.Status.Conditions = append(d.instance.Status.Conditions, newCondition)
-	case existingCondition.Type != string(state):
-		d.instance.Status.Conditions[idx] = newCondition
-	default:
-		d.needStatusUpdate = false
-	}
-
-	d.log.Info(fmt.Sprintf("Conditions '%v'", d.instance.Status.Conditions))
 }
 
-func (d *DRPCInstance) getObservedGeneration(state rmn.DRState) int64 {
-	conditions := rmnutil.GetMostRecentConditions(d.instance.Status.Conditions)
+func (d *DRPCInstance) updateConditions() {
+	d.log.Info(fmt.Sprintf("Current Conditions '%v'", d.instance.Status.Conditions))
 
-	var observedGeneration int64
-	if len(conditions) != 0 {
-		observedGeneration = conditions[0].ObservedGeneration
+	for _, condType := range []string{rmn.ConditionAvailable, rmn.ConditionReconciling} {
+		condition := d.newCondition(condType)
+
+		idx, _ := GetDRPCCondition(&d.instance.Status, condType)
+		if idx == -1 {
+			d.instance.Status.Conditions = append(d.instance.Status.Conditions, *condition)
+		} else {
+			d.instance.Status.Conditions[idx] = *condition
+		}
 	}
 
-	switch state {
+	d.log.Info(fmt.Sprintf("Updated Conditions '%v'", d.instance.Status.Conditions))
+}
+
+func (d *DRPCInstance) newCondition(condType string) *metav1.Condition {
+	return &metav1.Condition{
+		Type:   condType,
+		Status: d.getConditionStatus(condType),
+		// ObservedGeneration: d.getObservedGeneration(condType),
+		LastTransitionTime: metav1.Now(),
+		Reason:             d.getConditionReason(condType),
+		Message:            d.getConditionMessage(condType),
+	}
+}
+
+// func (d *DRPCInstance) getConditionType() string {
+// 	if d.instance.Status.Phase == "" {
+// 		return rmn.ConditionNotAvailable
+// 	}
+
+// 	return rmn.ConditionAvailable
+// }
+
+func (d *DRPCInstance) getConditionStatus(condType string) metav1.ConditionStatus {
+	if condType == rmn.ConditionAvailable {
+		return d.getConditionStatusForTypeAvailable()
+	} else if condType == rmn.ConditionReconciling {
+		return d.getConditionStatusForTypeReconciling()
+	}
+
+	return metav1.ConditionUnknown
+}
+
+func (d *DRPCInstance) getConditionStatusForTypeAvailable() metav1.ConditionStatus {
+	if d.isInFinalPhase() {
+		return metav1.ConditionTrue
+	}
+
+	if d.isInProgressingPhase() {
+		return metav1.ConditionFalse
+	}
+
+	return metav1.ConditionUnknown
+}
+
+func (d *DRPCInstance) getConditionStatusForTypeReconciling() metav1.ConditionStatus {
+	if d.isInFinalPhase() {
+		if d.reconciling() {
+			return metav1.ConditionFalse
+		}
+
+		return metav1.ConditionTrue
+	}
+
+	if d.isInProgressingPhase() {
+		return metav1.ConditionFalse
+	}
+
+	return metav1.ConditionUnknown
+}
+
+func (d *DRPCInstance) reconciling() bool {
+	idx, condition := GetDRPCCondition(&d.instance.Status, rmn.ConditionReconciling)
+	d.log.Info(fmt.Sprintf("Condition %v", condition))
+	if idx == -1 {
+		return false
+	}
+
+	if condition.Reason == rmn.ReasonSuccess && condition.Status == metav1.ConditionTrue {
+		return false
+	}
+
+	return true
+}
+
+func (d *DRPCInstance) getConditionReason(condType string) string {
+	if condType == rmn.ConditionAvailable {
+		return string(d.instance.Status.Phase)
+	} else if condType == rmn.ConditionReconciling {
+		return d.getReasonForConditionTypeReconciling()
+	}
+
+	return rmn.ReasonUnknown
+}
+
+func (d *DRPCInstance) getReasonForConditionTypeReconciling() string {
+	if d.isInFinalPhase() {
+		if d.reconciling() {
+			return rmn.ReasonCleaning
+		}
+
+		return rmn.ReasonSuccess
+	}
+
+	if d.isInProgressingPhase() {
+		return rmn.ReasonProgressing
+	}
+
+	return rmn.ReasonUnknown
+}
+
+func (d *DRPCInstance) getConditionMessage(condType string) string {
+	return fmt.Sprintf("Condition type %s", condType)
+}
+
+//nolint:exhaustive
+func (d *DRPCInstance) isInFinalPhase() bool {
+	switch d.instance.Status.Phase {
 	case rmn.Deployed:
 		fallthrough
 	case rmn.FailedOver:
@@ -1760,28 +1866,60 @@ func (d *DRPCInstance) getObservedGeneration(state rmn.DRState) int64 {
 	case rmn.FailedBack:
 		fallthrough
 	case rmn.Relocated:
-		return d.instance.Generation
-
-	case rmn.Deploying:
-	case rmn.FailingBack:
-	case rmn.FailingOver:
-	case rmn.Relocating:
+		return true
+	default:
+		return false
 	}
-
-	return observedGeneration
 }
+
+//nolint:exhaustive
+func (d *DRPCInstance) isInProgressingPhase() bool {
+	switch d.instance.Status.Phase {
+	case rmn.Deploying:
+		fallthrough
+	case rmn.FailingBack:
+		fallthrough
+	case rmn.FailingOver:
+		fallthrough
+	case rmn.Relocating:
+		return true
+	default:
+		return false
+	}
+}
+
+// func (d *DRPCInstance) getObservedGeneration() int64 {
+// 	conditions := rmnutil.GetMostRecentConditions(d.instance.Status.Conditions)
+
+// 	var observedGeneration int64
+// 	if len(conditions) != 0 {
+// 		observedGeneration = conditions[0].ObservedGeneration
+// 	}
+
+// 	switch d.instance.Status.Phase {
+// 	case rmn.Deployed:
+// 		fallthrough
+// 	case rmn.FailedOver:
+// 		fallthrough
+// 	case rmn.FailedBack:
+// 		fallthrough
+// 	case rmn.Relocated:
+// 		return d.instance.Generation
+
+// 	case rmn.Deploying:
+// 	case rmn.FailingBack:
+// 	case rmn.FailingOver:
+// 	case rmn.Relocating:
+// 	}
+
+// 	return observedGeneration
+// }
 
 func (d *DRPCInstance) getLastDRState() rmn.DRState {
-	conditions := rmnutil.GetMostRecentConditions(d.instance.Status.Conditions)
-	condition := FilterByObservedGeneration(conditions)
-
-	if condition != nil {
-		return rmn.DRState(condition.Type)
-	}
-
-	return ""
+	return d.instance.Status.Phase
 }
 
+//nolint:exhaustive
 func (d *DRPCInstance) getRequeueDuration() time.Duration {
 	d.log.Info("Getting requeue duration", "last known DR state", d.getLastDRState())
 
@@ -1799,11 +1937,6 @@ func (d *DRPCInstance) getRequeueDuration() time.Duration {
 		fallthrough
 	case rmn.Relocating:
 		duration = failbackRequeueDelay
-	case rmn.Deploying:
-	case rmn.Deployed:
-	case rmn.FailedOver:
-	case rmn.FailedBack:
-	case rmn.Relocated:
 	}
 
 	return duration

@@ -154,6 +154,10 @@ func createManagedClusterView(namespace string) *fndv2.ManagedClusterView {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      mcvName,
 			Namespace: namespace,
+			Annotations: map[string]string{
+				rmnutil.DRPCNameAnnotation:      DRPCName,
+				rmnutil.DRPCNamespaceAnnotation: DRPCNamespaceName,
+			},
 		},
 		Spec: fndv2.ViewSpec{
 			Scope: fndv2.ViewScope{
@@ -168,7 +172,6 @@ func createManagedClusterView(namespace string) *fndv2.ManagedClusterView {
 			err = k8sClient.Get(context.TODO(), types.NamespacedName{Name: mcvName, Namespace: namespace}, mcv)
 		}
 	}
-
 	Expect(err).NotTo(HaveOccurred())
 
 	return mcv
@@ -232,6 +235,19 @@ func updateManagedClusterView(mcv *fndv2.ManagedClusterView, resource interface{
 	}
 
 	err = k8sClient.Status().Update(context.TODO(), mcv)
+	if err != nil {
+		mcvLookupKey := types.NamespacedName{
+			Name:      mcv.Name,
+			Namespace: mcv.Namespace,
+		}
+		err = k8sClient.Get(context.TODO(), mcvLookupKey, mcv)
+		if err == nil {
+			err = k8sClient.Status().Update(context.TODO(), mcv)
+		}
+		if errors.IsNotFound(err) {
+			err = nil
+		}
+	}
 
 	Expect(err).NotTo(HaveOccurred())
 }
@@ -668,23 +684,57 @@ func verifyDRPCStatusPreferredClusterExpectation(drState rmn.DRState) {
 		err := k8sClient.Get(context.TODO(), drpcLookupKey, updatedDRPC)
 
 		if d := updatedDRPC.Status.PreferredDecision; err == nil && d != (plrv1.PlacementDecision{}) {
-			idx, _ := controllers.GetDRPCCondition(&updatedDRPC.Status, string(drState))
+			idx, condition := controllers.GetDRPCCondition(&updatedDRPC.Status, rmn.ConditionAvailable)
 
-			return d.ClusterName == EastManagedCluster && idx != -1
+			return d.ClusterName == EastManagedCluster && idx != -1 && condition.Reason == string(drState)
 		}
 
 		return false
 	}, timeout, interval).Should(BeTrue(), fmt.Sprintf("failed waiting for an updated DRPC. State %v", drState))
 
 	Expect(updatedDRPC.Status.PreferredDecision.ClusterName).Should(Equal(EastManagedCluster))
-	_, condition := controllers.GetDRPCCondition(&updatedDRPC.Status, string(drState))
-	Expect(condition.Type).Should(Equal(string(drState)))
+	_, condition := controllers.GetDRPCCondition(&updatedDRPC.Status, rmn.ConditionAvailable)
+	Expect(condition.Reason).Should(Equal(string(drState)))
 }
 
 func waitForCompletion() {
 	Eventually(func() bool {
 		return safeToProceed
 	}, timeout*2, interval).Should(BeTrue(), "failed to wait for hook to be called")
+}
+
+func cleanup() {
+	manifestWorkList := &ocmworkv1.ManifestWorkList{}
+	listOptions := &client.ListOptions{Namespace: WestManagedCluster}
+
+	Expect(k8sClient.List(context.TODO(), manifestWorkList, listOptions)).NotTo(HaveOccurred())
+	for idx := range manifestWorkList.Items {
+		err := k8sClient.Delete(context.TODO(), &manifestWorkList.Items[idx])
+		Expect(err).NotTo(HaveOccurred())
+	}
+
+	listOptions = &client.ListOptions{Namespace: EastManagedCluster}
+	Expect(k8sClient.List(context.TODO(), manifestWorkList, listOptions)).NotTo(HaveOccurred())
+	for idx := range manifestWorkList.Items {
+		err := k8sClient.Delete(context.TODO(), &manifestWorkList.Items[idx])
+		Expect(err).NotTo(HaveOccurred())
+	}
+
+	mcvList := &fndv2.ManagedClusterViewList{}
+	listOptions = &client.ListOptions{Namespace: WestManagedCluster}
+
+	Expect(k8sClient.List(context.TODO(), mcvList, listOptions)).NotTo(HaveOccurred())
+	for idx := range mcvList.Items {
+		err := k8sClient.Delete(context.TODO(), &mcvList.Items[idx])
+		Expect(err).NotTo(HaveOccurred())
+	}
+
+	listOptions = &client.ListOptions{Namespace: EastManagedCluster}
+	Expect(k8sClient.List(context.TODO(), mcvList, listOptions)).NotTo(HaveOccurred())
+	for idx := range mcvList.Items {
+		err := k8sClient.Delete(context.TODO(), &mcvList.Items[idx])
+		Expect(err).NotTo(HaveOccurred())
+	}
 }
 
 // +kubebuilder:docs-gen:collapse=Imports
@@ -711,9 +761,12 @@ var _ = Describe("DRPlacementControl Reconciler", func() {
 				waitForCompletion()
 
 				drpc := getLatestDRPC(DRPCName, DRPCNamespaceName)
-				// At this point expect the DRPC has gone through 2 states:
-				// {Deploying, Deployed}
+				// At this point expect the DRPC status condition to have 2 types
+				// {Available and Reconciling}
+				// Final type is 'Deployed'
 				Expect(len(drpc.Status.Conditions)).To(Equal(2))
+				_, condition := controllers.GetDRPCCondition(&drpc.Status, rmn.ConditionAvailable)
+				Expect(condition.Reason).To(Equal(string(rmn.Deployed)))
 			})
 		})
 		When("DRAction changes to failover", func() {
@@ -736,21 +789,26 @@ var _ = Describe("DRPlacementControl Reconciler", func() {
 
 				updateManifestWorkStatus(WestManagedCluster, "pv", ocmworkv1.WorkApplied)
 				updateManifestWorkStatus(WestManagedCluster, "vrg", ocmworkv1.WorkApplied)
+
+				updateClonedPlacementRuleStatus(userPlacementRule, drpc, WestManagedCluster)
 				verifyUserPlacementRuleDecision(userPlacementRule.Name, userPlacementRule.Namespace, WestManagedCluster)
 				verifyDRPCStatusPreferredClusterExpectation(rmn.FailedOver)
 				verifyVRGManifestWorkCreatedAsPrimary(WestManagedCluster)
 				Expect(getManifestWorkCount(WestManagedCluster)).Should(Equal(4)) // MWs for VRG+ROLES+PVs
 				waitForVRGMWDeletion(EastManagedCluster)
 				updateManagedClusterViewStatusAsNotFound(mcvEast)
-				// tickle the DRPC reconciler, should be removed once we watch for MCV resource updates
+
 				setDRPCSpecExpectationTo(drpc, "newS3Endpoint-1", rmn.ActionFailover, "")
 				Expect(getManifestWorkCount(EastManagedCluster)).Should(Equal(1)) // MW for VRG ROLE only
 				waitForCompletion()
 
 				drpc := getLatestDRPC(DRPCName, DRPCNamespaceName)
-				// At this point expect the DRPC has gone through 4 states:
-				// {Deploying, Deployed, FailingOver, FailedOver}
-				Expect(len(drpc.Status.Conditions)).To(Equal(4))
+				// At this point expect the DRPC status condition to have 2 types
+				// {Available and Reconciling}
+				// Final type is 'FailedOver'
+				Expect(len(drpc.Status.Conditions)).To(Equal(2))
+				_, condition := controllers.GetDRPCCondition(&drpc.Status, rmn.ConditionAvailable)
+				Expect(condition.Reason).To(Equal(string(rmn.FailedOver)))
 			})
 		})
 		When("DRPC Reconciler is called to failover the second time to the same cluster", func() {
@@ -805,12 +863,16 @@ var _ = Describe("DRPlacementControl Reconciler", func() {
 
 				updateManagedClusterViewStatusAsNotFound(mcvWest)
 				Expect(getManifestWorkCount(WestManagedCluster)).Should(Equal(2)) // Roles MWs
+
 				waitForCompletion()
 
 				drpc := getLatestDRPC(DRPCName, DRPCNamespaceName)
-				// At this point expect the DRPC has gone through 6 states:
-				// {Deploying, Deployed, FailingOver, FailedOver, FailingBack, FailedBack}
-				Expect(len(drpc.Status.Conditions)).To(Equal(6))
+				// At this point expect the DRPC status condition to have 2 types
+				// {Available and Reconciling}
+				// Final type is 'FailedBack'
+				Expect(len(drpc.Status.Conditions)).To(Equal(2))
+				_, condition := controllers.GetDRPCCondition(&drpc.Status, rmn.ConditionAvailable)
+				Expect(condition.Reason).To(Equal(string(rmn.FailedBack)))
 			})
 		})
 		When("DRPC Reconciler is called to failback for the second time to the same cluster", func() {
@@ -842,16 +904,16 @@ var _ = Describe("DRPlacementControl Reconciler", func() {
 				safeToProceed = false
 
 				mcvEast := createManagedClusterView(EastManagedCluster)
+				updateManagedClusterViewWithVRG(mcvEast, rmn.Secondary)
 				mcvWest := createManagedClusterView(WestManagedCluster)
+				updateManagedClusterViewWithVRG(mcvWest, rmn.Secondary)
 
 				updateClonedPlacementRuleStatus(userPlacementRule, drpc, WestManagedCluster)
 				setDRPCSpecExpectationTo(drpc, "", rmn.ActionFailover, EastManagedCluster)
 
-				updateManagedClusterViewWithVRG(mcvEast, rmn.Secondary)
-				updateManagedClusterViewWithVRG(mcvWest, rmn.Secondary)
-
 				updateManifestWorkStatus(WestManagedCluster, "pv", ocmworkv1.WorkApplied)
 				updateManifestWorkStatus(WestManagedCluster, "vrg", ocmworkv1.WorkApplied)
+
 				verifyUserPlacementRuleDecision(userPlacementRule.Name, userPlacementRule.Namespace, WestManagedCluster)
 				verifyDRPCStatusPreferredClusterExpectation(rmn.FailedOver)
 				verifyVRGManifestWorkCreatedAsPrimary(WestManagedCluster)
@@ -859,13 +921,17 @@ var _ = Describe("DRPlacementControl Reconciler", func() {
 				Expect(getManifestWorkCount(WestManagedCluster)).Should(Equal(4)) // MW for VRG+ROLES+PVs
 				waitForVRGMWDeletion(EastManagedCluster)
 				updateManagedClusterViewStatusAsNotFound(mcvEast)
+
 				Expect(getManifestWorkCount(EastManagedCluster)).Should(Equal(2)) // Roles MWs
 				waitForCompletion()
 
 				drpc := getLatestDRPC(DRPCName, DRPCNamespaceName)
-				// At this point expect the DRPC has gone through 6 states:
-				// {Deploying, Deployed, FailingOver, FailedOver, FailingBack, FailedBack}
-				Expect(len(drpc.Status.Conditions)).To(Equal(6))
+				// At this point expect the DRPC status condition to have 2 types
+				// {Available and Reconciling}
+				// Final type is 'FailedOver'
+				Expect(len(drpc.Status.Conditions)).To(Equal(2))
+				_, condition := controllers.GetDRPCCondition(&drpc.Status, rmn.ConditionAvailable)
+				Expect(condition.Reason).To(Equal(string(rmn.FailedOver)))
 			})
 		})
 		When("DRAction is set to relocation", func() {
@@ -876,6 +942,9 @@ var _ = Describe("DRPlacementControl Reconciler", func() {
 
 				mcvEast := createManagedClusterView(EastManagedCluster)
 				mcvWest := createManagedClusterView(WestManagedCluster)
+
+				updateManagedClusterViewWithVRG(mcvEast, rmn.Secondary)
+				updateManagedClusterViewWithVRG(mcvWest, rmn.Secondary)
 
 				updateManifestWorkStatus(WestManagedCluster, "vrg", ocmworkv1.WorkProgressing)
 				updateClonedPlacementRuleStatus(userPlacementRule, drpc, EastManagedCluster)
@@ -893,24 +962,29 @@ var _ = Describe("DRPlacementControl Reconciler", func() {
 
 				Expect(getManifestWorkCount(EastManagedCluster)).Should(Equal(4)) // MWs for VRG+ROLES+PVs
 				waitForVRGMWDeletion(WestManagedCluster)
+
 				updateManagedClusterViewStatusAsNotFound(mcvWest)
 				Expect(getManifestWorkCount(WestManagedCluster)).Should(Equal(2)) // Roles MWs
+
 				waitForCompletion()
 
 				drpc := getLatestDRPC(DRPCName, DRPCNamespaceName)
-				// At this point expect the DRPC has gone through 8 states:
-				// {Deploying, Deployed, FailingOver, FailedOver, FailingBack, FailedBack, Relocating, Relocated}
-				Expect(len(drpc.Status.Conditions)).To(Equal(8))
+				// At this point expect the DRPC status condition to have 2 types
+				// {Available and Reconciling}
+				// Final type is 'Relocated'
+				Expect(len(drpc.Status.Conditions)).To(Equal(2))
+				_, condition := controllers.GetDRPCCondition(&drpc.Status, rmn.ConditionAvailable)
+				Expect(condition.Reason).To(Equal(string(rmn.Relocated)))
 			})
-			When("Deleting DRPC", func() {
-				It("Should delete VRG from Primary (EastManagedCluster)", func() {
-					// ----------------------------- DELETE DRPC from PRIMARY --------------------------------------
-					By("\n\n*** DELETE DRPC ***\n\n")
-					safeToProceed = false
-					deleteDRPC()
-					waitForCompletion()
-					Expect(getManifestWorkCount(EastManagedCluster)).Should(Equal(2)) // Roles MWs
-				})
+		})
+		When("Deleting DRPC", func() {
+			It("Should delete VRG from Primary (EastManagedCluster)", func() {
+				// ----------------------------- DELETE DRPC from PRIMARY --------------------------------------
+				By("\n\n*** DELETE DRPC ***\n\n")
+				safeToProceed = false
+				deleteDRPC()
+				waitForCompletion()
+				Expect(getManifestWorkCount(EastManagedCluster)).Should(Equal(2)) // Roles MWs
 			})
 		})
 	})
