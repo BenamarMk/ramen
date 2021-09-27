@@ -50,7 +50,7 @@ import (
 
 const (
 	// DRPC CR finalizer
-	DRPCFinalizer string = "drpc.ramendr.openshift.io/finalizer"
+	DRPCFinalizer string = "drpc.ramendr.openshift.io/drpc-protection"
 
 	// Ramen scheduler
 	RamenScheduler string = "ramen"

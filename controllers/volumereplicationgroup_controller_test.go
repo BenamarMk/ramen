@@ -1039,12 +1039,14 @@ type FakePVDownloader struct{}
 
 func (s FakePVDownloader) DownloadPVs(ctx context.Context, r client.Reader,
 	objStoreGetter vrgController.ObjectStoreGetter, s3Profile, callerTag string,
-	s3Bucket string) ([]corev1.PersistentVolume, error) {
+	s3Bucket string) ([]corev1.PersistentVolume, []corev1.PersistentVolumeClaim, error) {
 	capacity := corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("1Gi")}
 	accessModes := []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce}
 	hostPathType := corev1.HostPathDirectoryOrCreate
 
 	pvList := []corev1.PersistentVolume{}
+	pvcList := []corev1.PersistentVolumeClaim{}
+	var i int
 
 	for _, pvName := range PVsToRestore {
 		pv := &corev1.PersistentVolume{
@@ -1087,9 +1089,40 @@ func (s FakePVDownloader) DownloadPVs(ctx context.Context, r client.Reader,
 		}
 
 		pvList = append(pvList, *pv)
+
+		capacity := corev1.ResourceList{
+			corev1.ResourceStorage: resource.MustParse("1Gi"),
+		}
+
+		storageclass := "manual"
+		objectNameSuffix := 'a' + testCaseNumber - 1
+		namespace := fmt.Sprintf("envtest-ns-%c", objectNameSuffix)
+		pvcName := fmt.Sprintf("pvc-%c-%02d", objectNameSuffix, i)
+		i++
+
+		accessModes := []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce}
+		pvc := &corev1.PersistentVolumeClaim{
+			TypeMeta: metav1.TypeMeta{},
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      pvcName,
+				Labels:    map[string]string{},
+				Namespace: namespace,
+				// ResourceVersion: "1",
+				SelfLink: "/api/v1/namespaces/testns/persistentvolumeclaims/" + pvcName,
+				UID:      types.UID(pvName),
+			},
+			Spec: corev1.PersistentVolumeClaimSpec{
+				AccessModes:      accessModes,
+				Resources:        corev1.ResourceRequirements{Requests: capacity},
+				VolumeName:       pvName,
+				StorageClassName: &storageclass,
+			},
+		}
+
+		pvcList = append(pvcList, *pvc)
 	}
 
-	return pvList, nil
+	return pvList, nil, nil
 }
 
 type FakePVUploader struct{}

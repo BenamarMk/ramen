@@ -33,6 +33,8 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+
+	// pvutil "k8s.io/kubernetes/pkg/controller/volume/persistentvolume/util"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -50,7 +52,8 @@ import (
 
 type PVDownloader interface {
 	DownloadPVs(ctx context.Context, r client.Reader, objStoreGetter ObjectStoreGetter,
-		s3Profile string, callerTag string, s3Bucket string) ([]corev1.PersistentVolume, error)
+		s3Profile string, callerTag string, s3Bucket string) (
+		[]corev1.PersistentVolume, []corev1.PersistentVolumeClaim, error)
 }
 
 type PVUploader interface {
@@ -258,7 +261,7 @@ func filterPVC(mgr manager.Manager, pvc *corev1.PersistentVolumeClaim, log logr.
 // +kubebuilder:rbac:groups=replication.storage.openshift.io,resources=volumereplications,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=replication.storage.openshift.io,resources=volumereplicationclasses,verbs=get;list;watch
 // +kubebuilder:rbac:groups=storage.k8s.io,resources=storageclasses,verbs=get;list;watch
-// +kubebuilder:rbac:groups=core,resources=persistentvolumeclaims,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups=core,resources=persistentvolumeclaims,verbs=get;list;watch;update;patch;create
 // +kubebuilder:rbac:groups=core,resources=persistentvolumes,verbs=get;list;watch;update;patch;create
 // +kubebuilder:rbac:groups=core,resources=events,verbs=get;create;patch;update
 // +kubebuilder:rbac:groups="",namespace=system,resources=secrets,verbs=get
@@ -335,6 +338,7 @@ const (
 	pvVRAnnotationRetentionKey    = "volumereplicationgroups.ramendr.openshift.io/vr-retained"
 	pvVRAnnotationRetentionValue  = "retained"
 	PVRestoreAnnotation           = "volumereplicationgroups.ramendr.openshift.io/ramen-restore"
+	PVCRestoreAnnotation          = PVRestoreAnnotation
 )
 
 func (v *VRGInstance) processVRG() (ctrl.Result, error) {
@@ -466,7 +470,7 @@ func (v *VRGInstance) restorePVs() error {
 	success := false
 
 	for _, s3ProfileName := range v.instance.Spec.S3ProfileList {
-		pvList, err := v.listPVsFromS3Store(s3ProfileName)
+		pvList, pvcList, err := v.listPVsFromS3Store(s3ProfileName)
 		if err != nil {
 			v.log.Error(err, "failed to retrieve PVs from S3 store", "ProfileName", s3ProfileName)
 
@@ -474,8 +478,16 @@ func (v *VRGInstance) restorePVs() error {
 		}
 
 		v.log.Info(fmt.Sprintf("Found %d PVs", len(pvList)))
+		v.log.Info(fmt.Sprintf("Found %d PVCs", len(pvcList)))
 
 		err = v.restorePVClusterData(pvList)
+		if err != nil {
+			success = false
+			// go to the next profile
+			continue
+		}
+
+		err = v.restorePVCClusterData(pvcList)
 		if err != nil {
 			success = false
 			// go to the next profile
@@ -498,7 +510,8 @@ func (v *VRGInstance) restorePVs() error {
 	return nil
 }
 
-func (v *VRGInstance) listPVsFromS3Store(s3ProfileName string) ([]corev1.PersistentVolume, error) {
+func (v *VRGInstance) listPVsFromS3Store(s3ProfileName string) (
+	[]corev1.PersistentVolume, []corev1.PersistentVolumeClaim, error) {
 	s3Bucket := constructBucketName(v.instance.Namespace, v.instance.Name)
 
 	return v.reconciler.PVDownloader.DownloadPVs(
@@ -515,10 +528,10 @@ type ObjectStorePVDownloader struct{}
 
 func (s ObjectStorePVDownloader) DownloadPVs(ctx context.Context, r client.Reader,
 	objStoreGetter ObjectStoreGetter, s3Profile string,
-	callerTag string, s3Bucket string) ([]corev1.PersistentVolume, error) {
+	callerTag string, s3Bucket string) ([]corev1.PersistentVolume, []corev1.PersistentVolumeClaim, error) {
 	objectStore, err := objStoreGetter.objectStore(ctx, r, s3Profile, callerTag)
 	if err != nil {
-		return nil, fmt.Errorf("error when downloading PVs, err %w", err)
+		return nil, nil, fmt.Errorf("error when downloading PVs, err %w", err)
 	}
 
 	return objectStore.downloadPVs(s3Bucket)
@@ -564,6 +577,46 @@ func (v *VRGInstance) restorePVClusterData(pvList []corev1.PersistentVolume) err
 	return nil
 }
 
+func (v *VRGInstance) restorePVCClusterData(pvcList []corev1.PersistentVolumeClaim) error {
+	numRestored := 0
+
+	for idx := range pvcList {
+		pvc := &pvcList[idx]
+		v.cleanupPVCForRestore(pvc)
+		v.addPVCRestoreAnnotation(pvc)
+
+		if err := v.reconciler.Create(v.ctx, pvc); err != nil {
+			if errors.IsAlreadyExists(err) {
+				// err := v.validatePVCExistence(pvc)
+				// if err != nil {
+				// 	v.log.Info("PVC exists. Ignoring and moving to next PV", "error", err.Error())
+				// 	// ignoring any errors
+				// 	continue
+				// }
+
+				// Valid PVC exists and it is managed by Ramen
+				numRestored++
+
+				continue
+			}
+
+			v.log.Info("Failed to restore PVC", "name", pvc.Name, "Error", err)
+
+			continue
+		}
+
+		numRestored++
+	}
+
+	if numRestored != len(pvcList) {
+		return fmt.Errorf("failed to restore all PVCs. Total %d. Restored %d", len(pvcList), numRestored)
+	}
+
+	v.log.Info("Success restoring PVCs", "Total", numRestored)
+
+	return nil
+}
+
 func (v *VRGInstance) validatePVExistence(pv *corev1.PersistentVolume) error {
 	existingPV := &corev1.PersistentVolume{}
 
@@ -602,6 +655,24 @@ func (v *VRGInstance) addPVRestoreAnnotation(pv *corev1.PersistentVolume) {
 	}
 
 	pv.ObjectMeta.Annotations[PVRestoreAnnotation] = "True"
+}
+
+// cleanupPVCForRestore cleans up required PVC fields, to ensure restore succeeds to a new cluster, and
+// rebinding the PVC to an existing PV with the same claimRef
+func (v *VRGInstance) cleanupPVCForRestore(pvc *corev1.PersistentVolumeClaim) {
+	pvc.ObjectMeta.Annotations = map[string]string{}
+	pvc.ObjectMeta.Finalizers = []string{}
+	pvc.ObjectMeta.ResourceVersion = ""
+	pvc.ObjectMeta.OwnerReferences = nil
+}
+
+// addPVCRestoreAnnotation adds annotation to the PVC indicating that the PV is restored by Ramen
+func (v *VRGInstance) addPVCRestoreAnnotation(pvc *corev1.PersistentVolumeClaim) {
+	if pvc.ObjectMeta.Annotations == nil {
+		pvc.ObjectMeta.Annotations = map[string]string{}
+	}
+
+	pvc.ObjectMeta.Annotations[PVCRestoreAnnotation] = "True"
 }
 
 func (v *VRGInstance) initializeStatus() {
@@ -1179,7 +1250,28 @@ func (v *VRGInstance) preparePVCForVRDeletion(pvc *corev1.PersistentVolumeClaim,
 	// application is finally being undeployed, and also the PV would be garbage collected.
 
 	// Remove VR finalizer from PVC and the annotation (PVC maybe left behind, so remove the annotation)
-	return v.removeProtectedFinalizerFromPVC(pvc, log)
+	err := v.removeProtectedFinalizerFromPVC(pvc, log)
+	if err != nil {
+		return err
+	}
+
+	if !pvc.GetDeletionTimestamp().IsZero() {
+		return nil
+	}
+
+	err = v.reconciler.Delete(v.ctx, pvc)
+	if err != nil {
+		if errors.IsNotFound(err) {
+			return nil
+		}
+
+		msg := fmt.Sprintf("Failed to delete PVC %s", pvc.Name)
+		log.Error(err, msg)
+
+		return fmt.Errorf("%s (%w)", msg, err)
+	}
+
+	return nil
 }
 
 // retainPVForPVC updates the PV reclaim policy to retain for a given PVC
@@ -1364,7 +1456,7 @@ func (ObjectStorePVUploader) UploadPV(v interface{}, s3ProfileName string,
 	}
 
 	// Upload PV to object store
-	if err := objectStore.uploadPV(s3Bucket, pv.Name, pv); err != nil {
+	if err := objectStore.uploadPV(s3Bucket, pv.Name, pv, *pvc); err != nil {
 		return fmt.Errorf("error uploading PV %s, err %w", pv.Name, err)
 	}
 

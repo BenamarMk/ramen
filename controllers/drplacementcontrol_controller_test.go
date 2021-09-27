@@ -680,7 +680,8 @@ func getLatestUserPlacementRule(name, namespace string) *plrv1.PlacementRule {
 func waitForCompletion(state string) {
 	Eventually(func() bool {
 		return drstate == state
-	}, timeout*2, interval).Should(BeTrue(), "failed to wait for hook to be called")
+	}, timeout*2, interval).Should(BeTrue(),
+		fmt.Sprintf("failed to wait for hook to be called. found: %s, expected %s", drstate, state))
 }
 
 func relocateToPreferredCluster(userPlacementRule *plrv1.PlacementRule) {
@@ -862,7 +863,8 @@ var _ = Describe("DRPlacementControl Reconciler", func() {
 				// ----------------------------- Clear DRAction --------------------------------------
 				By("\n\n>>> Update DRPC status")
 				clearDRPCStatus()
-				waitForCompletion(string(rmn.FailedOver))
+				time.Sleep(time.Second * 5)
+				waitForCompletion(string(""))
 				drpc = getLatestDRPC()
 				// At this point expect the DRPC status condition to have 2 types
 				// {Available and PeerReady}

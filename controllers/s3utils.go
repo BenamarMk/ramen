@@ -95,14 +95,15 @@ type objectStorer interface {
 	purgeBucket(bucket string) error
 	// listBuckets() (buckets []string, err error)
 	uploadPV(bucket string, pvKeySuffix string,
-		pv corev1.PersistentVolume) error
+		pv corev1.PersistentVolume, pvc corev1.PersistentVolumeClaim) error
 	uploadTypedObject(bucket string, keySuffix string,
 		uploadContent interface{}) error
 	uploadObject(bucket string, key string,
 		uploadContent interface{}) error
 	verifyPVUpload(bucket string, pvKeySuffix string,
 		verifyPV corev1.PersistentVolume) error
-	downloadPVs(bucket string) (pvList []corev1.PersistentVolume, err error)
+	downloadPVs(bucket string) (pvList []corev1.PersistentVolume,
+		pvcList []corev1.PersistentVolumeClaim, err error)
 	downloadTypedObjects(bucket string,
 		objectType reflect.Type) (interface{}, error)
 	listKeys(bucket string, keyPrefix string) (keys []string, err error)
@@ -336,8 +337,13 @@ func (s *s3ObjectStore) purgeBucket(bucket string) (
 // - OK to call UploadPV() concurrently from multiple goroutines safely.
 // - Expects the given bucket to be already present
 func (s *s3ObjectStore) uploadPV(bucket string, pvKeySuffix string,
-	pv corev1.PersistentVolume) error {
-	return s.uploadTypedObject(bucket, pvKeySuffix /* key suffix */, pv)
+	pv corev1.PersistentVolume, pvc corev1.PersistentVolumeClaim) error {
+	err := s.uploadTypedObject(bucket, pvKeySuffix /* key suffix */, pv)
+	if err != nil {
+		return err
+	}
+
+	return s.uploadTypedObject(bucket, pvKeySuffix, pvc)
 }
 
 // uploadTypedObject uploads to the given bucket the given uploadContent with a
@@ -417,27 +423,48 @@ func (s *s3ObjectStore) verifyPVUpload(bucket string, pvKeySuffix string,
 // - Downloads objects with key prefix:  "v1.PersistentVolume/"
 // - If bucket doesn't exists, will return ErrCodeNoSuchBucket "NoSuchBucket"
 func (s *s3ObjectStore) downloadPVs(bucket string) (
-	pvList []corev1.PersistentVolume, err error) {
-	result, err := s.downloadTypedObjects(bucket,
-		reflect.TypeOf(corev1.PersistentVolume{}))
+	[]corev1.PersistentVolume, []corev1.PersistentVolumeClaim, error) {
+	result, err := s.download(bucket, reflect.TypeOf(corev1.PersistentVolume{}))
+	if err != nil {
+		return nil, nil, err
+	}
+
+	pvList, ok := result.([]corev1.PersistentVolume)
+	if !ok {
+		return nil, nil, fmt.Errorf("unable to download PV type: got %T", result)
+	}
+
+	result, err = s.download(bucket, reflect.TypeOf(corev1.PersistentVolumeClaim{}))
+	if err != nil {
+		return pvList, nil, err
+	}
+
+	pvcList, ok := result.([]corev1.PersistentVolumeClaim)
+	if !ok {
+		return pvList, nil, fmt.Errorf("unable to download PVC type: got %T", result)
+	}
+
+	return pvList, pvcList, nil
+}
+
+// downloadPVs downloads all PVs in the given bucket.
+// - Downloads objects with key prefix:  "v1.PersistentVolume/"
+// - If bucket doesn't exists, will return ErrCodeNoSuchBucket "NoSuchBucket"
+func (s *s3ObjectStore) download(bucket string, objectType reflect.Type) (interface{}, error) {
+	result, err := s.downloadTypedObjects(bucket, objectType)
 	if err != nil {
 		// TODO: Fix this in higher layers once we have related S3 fixes
 		var aerr awserr.Error
 		if errorswrapper.As(err, &aerr) {
 			if aerr.Code() == s3.ErrCodeNoSuchBucket {
-				return pvList, nil
+				return result, nil
 			}
 		}
 
 		return nil, fmt.Errorf("unable to download: %s, %w", bucket, err)
 	}
 
-	pvList, ok := result.([]corev1.PersistentVolume)
-	if !ok {
-		return nil, fmt.Errorf("unable to download PV type: got %T", result)
-	}
-
-	return pvList, nil
+	return result, nil
 }
 
 // downloadTypedObjects downloads all objects of the given objectType that have
