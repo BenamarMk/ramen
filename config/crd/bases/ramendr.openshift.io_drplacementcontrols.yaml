@@ -18,7 +18,23 @@ spec:
     singular: drplacementcontrol
   scope: Namespaced
   versions:
-  - name: v1alpha1
+  - additionalPrinterColumns:
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    - jsonPath: .spec.preferredCluster
+      name: preferredCluster
+      type: string
+    - jsonPath: .spec.failoverCluster
+      name: failoverCluster
+      type: string
+    - jsonPath: .spec.action
+      name: desiredState
+      type: string
+    - jsonPath: .status.phase
+      name: currentState
+      type: string
+    name: v1alpha1
     schema:
       openAPIV3Schema:
         description: DRPlacementControl is the Schema for the drplacementcontrols

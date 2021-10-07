@@ -139,6 +139,11 @@ type DRPlacementControlStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:JSONPath=".metadata.creationTimestamp",name=Age,type=date
+// +kubebuilder:printcolumn:JSONPath=".spec.preferredCluster",name=preferredCluster,type=string
+// +kubebuilder:printcolumn:JSONPath=".spec.failoverCluster",name=failoverCluster,type=string
+// +kubebuilder:printcolumn:JSONPath=".spec.action",name=desiredState,type=string
+// +kubebuilder:printcolumn:JSONPath=".status.phase",name=currentState,type=string
 // +kubebuilder:resource:shortName=drpc
 
 // DRPlacementControl is the Schema for the drplacementcontrols API
