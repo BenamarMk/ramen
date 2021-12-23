@@ -507,21 +507,17 @@ func (v *VSRGInstance) restorePVCs() error {
 
 	v.log.Info("Restoring PVCs to this managed cluster.", "RDInfo", v.instance.Spec.RDSpec)
 
-	success := false
+	success := true
 
-	for _, rdInfo := range v.instance.Spec.RDSpec {
+	for _, rdSpec := range v.instance.Spec.RDSpec {
+		//TODO: Restore volume - if failure, set success=false
 
 		setVRGClusterDataReadyCondition(&v.instance.Status.Conditions, v.instance.Generation, msg)
-
-		v.log.Info("Restored PVC", "rdInfo", rdInfo)
-
-		success = true
-
-		break
+		v.log.Info("Restored PVC", "rdSpec", rdSpec)
 	}
 
 	if !success {
-		return fmt.Errorf("failed to restorePVCs using RDInfos (%v)", v.instance.Spec.RDSpec)
+		return fmt.Errorf("failed to restorePVCs using RDSpec (%v)", v.instance.Spec.RDSpec)
 	}
 
 	return nil
