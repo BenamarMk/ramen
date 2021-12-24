@@ -230,7 +230,7 @@ func (d *DRPCInstance) updateDestinationVSRG(clusterName string, srcVSRG *rmn.Vo
 		dstVSRG.Spec.RDSpec = append(dstVSRG.Spec.RDSpec, rdSpec)
 	}
 
-	return d.reconciler.Update(d.ctx, dstVSRG)
+	return d.updateVSRGRDSpec(clusterName, dstVSRG)
 }
 
 func (d *DRPCInstance) ensureRepliationSource(sourceCluster string) error {
@@ -286,7 +286,7 @@ func (d *DRPCInstance) updateSourceVSRG(clusterName string, srcVSRG *rmn.VolSync
 		srcVSRG.Spec.RSSpec = append(srcVSRG.Spec.RSSpec, rsSpec)
 	}
 
-	return d.reconciler.Update(d.ctx, srcVSRG)
+	return d.updateVSRGRDSpec(clusterName, srcVSRG)
 }
 
 func (d *DRPCInstance) getHomeCluster() (string, string) {
@@ -339,23 +339,31 @@ func (d *DRPCInstance) isUserPlRuleUpdated(homeCluster string) bool {
 func (d *DRPCInstance) isVRGAlreadyDeployedOnTargetCluster(targetCluster string) bool {
 	d.log.Info(fmt.Sprintf("isAlreadyDeployedAndProtected? - %q", reflect.ValueOf(d.vrgs).MapKeys()))
 
-	return d.getCachedVRG(targetCluster) != nil
+	return d.isVRGExists(targetCluster)
 }
 
-func (d *DRPCInstance) getCachedVRG(clusterName string) *rmn.VolumeReplicationGroup {
-	vrg, found := d.getVRG(clusterName)
+func (d *DRPCInstance) isVRGExists(clusterName string) bool {
+	_, found := d.getVRG(clusterName)
 	if !found {
-		d.log.Info("VRG not found on cluster", "Name", clusterName)
+		_, found := d.getVSRG(clusterName)
+		if !found {
+			d.log.Info("VRG not found on cluster", "Name", clusterName)
 
-		return nil
+			return false
+		}
 	}
 
-	return vrg
+	return true
 }
 
 func (d *DRPCInstance) isVRGAlreadyDeployedElsewhere(clusterToSkip string) (string, bool) {
-	for clusterName := range d.vrgs {
+	for clusterName, obj := range d.vrgs {
 		if clusterName == clusterToSkip {
+			continue
+		}
+
+		_, ok := obj.(*rmn.VolSyncReplicationGroup)
+		if ok {
 			continue
 		}
 
@@ -432,6 +440,10 @@ func (d *DRPCInstance) createVolSyncManifestWorks(homeCluster string) error {
 	// Create or update ManifestWork for all the peers
 	for _, drCluster := range d.drPolicy.Spec.DRClusterSet {
 		peerCluster := drCluster.Name
+		if peerCluster == homeCluster {
+			continue
+		}
+
 		if err := d.mwu.CreateOrUpdateVolSyncManifestWork(
 			d.instance.Name, d.instance.Namespace,
 			peerCluster, d.drPolicy,
@@ -920,6 +932,22 @@ func (d *DRPCInstance) getVRGFromManifestWork(clusterName string) (*rmn.VolumeRe
 	}
 
 	return vrg, nil
+}
+
+func (d *DRPCInstance) getVSRGFromManifestWork(clusterName string) (*rmn.VolSyncReplicationGroup, error) {
+	vsrgMWName := d.mwu.BuildManifestWorkName(rmnutil.MWTypeVSRG)
+
+	mw, err := d.mwu.FindManifestWork(vsrgMWName, clusterName)
+	if err != nil {
+		return nil, fmt.Errorf("%w", err)
+	}
+
+	vsrg, err := d.extractVSRGFromManifestWork(mw)
+	if err != nil {
+		return nil, err
+	}
+
+	return vsrg, nil
 }
 
 func (d *DRPCInstance) hasAlreadySwitchedOver(targetCluster string) bool {
@@ -1469,6 +1497,74 @@ func (d *DRPCInstance) extractVRGFromManifestWork(mw *ocmworkv1.ManifestWork) (*
 	}
 
 	return vrg, nil
+}
+
+func (d *DRPCInstance) updateVSRGRDSpec(clusterName string, tgtVSRG *rmn.VolSyncReplicationGroup) error {
+	vsrgMWName := d.mwu.BuildManifestWorkName(rmnutil.MWTypeVSRG)
+	d.log.Info(fmt.Sprintf("Updating RDSpec for VSRG that is ownedby MW %s for cluster %s", vsrgMWName, clusterName))
+
+	mw, err := d.mwu.FindManifestWork(vsrgMWName, clusterName)
+	if err != nil {
+		if errors.IsNotFound(err) {
+			return nil
+		}
+
+		d.log.Error(err, "failed to update VSRG")
+
+		return fmt.Errorf("failed to update VRG %s, in namespace %s (%w)",
+			vsrgMWName, clusterName, err)
+	}
+
+	vsrg, err := d.extractVSRGFromManifestWork(mw)
+	if err != nil {
+		d.log.Error(err, "failed to update VSRG state")
+
+		return err
+	}
+
+	if vsrg.Spec.ReplicationState == rmn.Primary {
+		vsrg.Spec.RSSpec = tgtVSRG.Spec.RSSpec
+	} else if vsrg.Spec.ReplicationState != rmn.Secondary {
+		vsrg.Spec.RDSpec = tgtVSRG.Spec.RDSpec
+	} else {
+		d.log.Info(fmt.Sprintf("VSRG %s is neither primary nor secondary on this cluster %s", vsrg.Name, mw.Namespace))
+
+		return fmt.Errorf("failed to update MW due to wrong state")
+	}
+
+	vsrgClientManifest, err := d.mwu.GenerateManifest(vsrg)
+	if err != nil {
+		d.log.Error(err, "failed to generate manifest")
+
+		return fmt.Errorf("failed to generate VSRG manifest (%w)", err)
+	}
+
+	mw.Spec.Workload.Manifests[0] = *vsrgClientManifest
+
+	err = d.reconciler.Update(d.ctx, mw)
+	if err != nil {
+		return fmt.Errorf("failed to update MW (%w)", err)
+	}
+
+	d.log.Info(fmt.Sprintf("Updated VSRG running in cluster %s. VSRG (%v)", clusterName, vsrg))
+
+	return nil
+}
+
+func (d *DRPCInstance) extractVSRGFromManifestWork(mw *ocmworkv1.ManifestWork) (*rmn.VolSyncReplicationGroup, error) {
+	if len(mw.Spec.Workload.Manifests) == 0 {
+		return nil, fmt.Errorf("invalid VRG ManifestWork for type: %s", mw.Name)
+	}
+
+	vsrgClientManifest := &mw.Spec.Workload.Manifests[0]
+	vsrg := &rmn.VolSyncReplicationGroup{}
+
+	err := yaml.Unmarshal(vsrgClientManifest.RawExtension.Raw, &vsrg)
+	if err != nil {
+		return nil, fmt.Errorf("unable to unmarshal VRG object (%w)", err)
+	}
+
+	return vsrg, nil
 }
 
 func (d *DRPCInstance) advanceToNextDRState() {

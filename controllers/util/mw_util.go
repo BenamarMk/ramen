@@ -53,6 +53,7 @@ const (
 
 	// ManifestWork Types
 	MWTypeVRG string = "vrg"
+	MWTypeVSRG string = "vsrg"
 	MWTypeNS  string = "ns"
 
 	// Annotations for MW and PlacementRule
@@ -192,7 +193,7 @@ func (mwu *MWUtil) generateVolSyncManifestWork(
 	manifests := []ocmworkv1.Manifest{*vrgClientManifest}
 
 	return mwu.newManifestWork(
-		fmt.Sprintf(ManifestWorkNameFormat, name, namespace, MWTypeVRG),
+		fmt.Sprintf(ManifestWorkNameFormat, name, namespace, MWTypeVSRG),
 		homeCluster,
 		map[string]string{"app": "VRG"},
 		manifests), nil
@@ -220,7 +221,7 @@ func (mwu *MWUtil) generateVolSyncManifest(
 	pvcSelector metav1.LabelSelector, schedulingInterval string,
 	replClassSelector metav1.LabelSelector, repState rmn.ReplicationState) (*ocmworkv1.Manifest, error) {
 	return mwu.GenerateManifest(&rmn.VolSyncReplicationGroup{
-		TypeMeta:   metav1.TypeMeta{Kind: "VolumeReplicationGroup", APIVersion: "ramendr.openshift.io/v1alpha1"},
+		TypeMeta:   metav1.TypeMeta{Kind: "VolSyncReplicationGroup", APIVersion: "ramendr.openshift.io/v1alpha1"},
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
 		Spec: rmn.VolSyncReplicationGroupSpec{
 			PVCSelector:              pvcSelector,
@@ -359,7 +360,7 @@ func (mwu *MWUtil) generateVRGClusterRoleManifest() (*ocmworkv1.Manifest, error)
 		Rules: []rbacv1.PolicyRule{
 			{
 				APIGroups: []string{"ramendr.openshift.io"},
-				Resources: []string{"volumereplicationgroups"},
+				Resources: []string{"volumereplicationgroups","volsyncreplicationgroups"},
 				Verbs:     []string{"create", "get", "list", "update", "delete"},
 			},
 		},

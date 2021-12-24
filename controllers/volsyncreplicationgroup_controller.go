@@ -47,7 +47,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 )
 
-const vsrgFinalizerName = "volumereplicationgroups.ramendr.openshift.io/vsrg-protection"
+const vsrgFinalizerName = "volsyncreplicationgroups.ramendr.openshift.io/vsrg-protection"
 
 // VolSyncReplicationGroupReconciler reconciles a VolSyncReplicationGroup object
 type VolSyncReplicationGroupReconciler struct {
@@ -60,7 +60,7 @@ type VolSyncReplicationGroupReconciler struct {
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *VolSyncReplicationGroupReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	pvcPredicate := pvcPredicateFuncFoVolSync()
+	pvcPredicate := pvcPredicateFuncForVolSync()
 	pvcMapFun := handler.EnqueueRequestsFromMapFunc(handler.MapFunc(func(obj client.Object) []reconcile.Request {
 		log := ctrl.Log.WithName("pvcmap").WithName("VolSyncReplicationGroup")
 
@@ -75,7 +75,7 @@ func (r *VolSyncReplicationGroupReconciler) SetupWithManager(mgr ctrl.Manager) e
 			log.WithValues("pvc", types.NamespacedName{Name: pvc.Name, Namespace: pvc.Namespace}))
 	}))
 
-	r.eventRecorder = rmnutil.NewEventReporter(mgr.GetEventRecorderFor("controller_VolumeReplicationGroup"))
+	r.eventRecorder = rmnutil.NewEventReporter(mgr.GetEventRecorderFor("controller_VolSyncReplicationGroup"))
 
 	r.Log.Info("Adding VolSyncReplicationGroup controller")
 
@@ -94,22 +94,22 @@ func init() {
 
 // pvcPredicateFunc sends reconcile requests for create and delete events.
 // For them the filtering of whether the pvc belongs to the any of the
-// VolumeReplicationGroup CRs and identifying such a CR is done in the
+// VolSyncReplicationGroup CRs and identifying such a CR is done in the
 // map function by comparing namespaces and labels.
 // But for update of pvc, the reconcile request should be sent only for
 // specific changes. Do that comparison here.
-func pvcPredicateFuncFoVolSync() predicate.Funcs {
+func pvcPredicateFuncForVolSync() predicate.Funcs {
 	pvcPredicate := predicate.Funcs{
 		// NOTE: Create predicate is retained, to help with logging the event
 		CreateFunc: func(e event.CreateEvent) bool {
-			log := ctrl.Log.WithName("pvcmap").WithName("VolumeReplicationGroup")
+			log := ctrl.Log.WithName("pvcmap").WithName("VolSyncReplicationGroup")
 
 			log.Info("Create event for PersistentVolumeClaim")
 
 			return true
 		},
 		UpdateFunc: func(e event.UpdateEvent) bool {
-			log := ctrl.Log.WithName("pvcmap").WithName("VolumeReplicationGroup")
+			log := ctrl.Log.WithName("pvcmap").WithName("VolSyncReplicationGroup")
 			oldPVC, ok := e.ObjectOld.DeepCopyObject().(*corev1.PersistentVolumeClaim)
 			if !ok {
 				log.Info("Failed to deep copy older PersistentVolumeClaim")
