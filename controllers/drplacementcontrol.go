@@ -168,7 +168,7 @@ func (d *DRPCInstance) ensureVolSyncReplicationSetup(homeCluster string) error {
 		return err
 	}
 
-	return d.ensureRepliationSource(homeCluster)
+	return d.ensureReplicationSource(homeCluster)
 }
 
 func (d *DRPCInstance) ensureReplicationDestination(sourceCluster string) error {
@@ -223,7 +223,7 @@ func (d *DRPCInstance) updateDestinationVSRG(clusterName string, srcVSRG *rmn.Vo
 	for _, volSyncPVC := range srcVSRG.Status.VolSyncPVCs {
 		rdSpec := rmn.ReplicationDestinationSpec{
 			VolSyncPVCInfo: volSyncPVC,
-			//TODO: SSHKeys
+			SSHKeys:        "test-volsync-ssh-keys", //FIXME:
 		}
 
 		dstVSRG.Spec.RDSpec = append(dstVSRG.Spec.RDSpec, rdSpec)
@@ -232,7 +232,7 @@ func (d *DRPCInstance) updateDestinationVSRG(clusterName string, srcVSRG *rmn.Vo
 	return d.updateVSRGRDSpec(clusterName, dstVSRG)
 }
 
-func (d *DRPCInstance) ensureRepliationSource(sourceCluster string) error {
+func (d *DRPCInstance) ensureReplicationSource(sourceCluster string) error {
 	const maxNumberOfVSRG = 2
 	if len(d.vrgs) != maxNumberOfVSRG {
 		return fmt.Errorf("wrong number of VRGS %v", d.vrgs)
@@ -279,7 +279,7 @@ func (d *DRPCInstance) updateSourceVSRG(clusterName string, srcVSRG *rmn.VolSync
 		rsSpec := rmn.ReplicationSourceSpec{
 			PVCName: rdInfo.PVCName,
 			Address: rdInfo.Address,
-			SSHKeys: "MY_SSH_KEYS_REF",
+			SSHKeys: "test-volsync-ssh-keys", //FIXME:
 		}
 
 		srcVSRG.Spec.RSSpec = append(srcVSRG.Spec.RSSpec, rsSpec)
@@ -1523,7 +1523,7 @@ func (d *DRPCInstance) updateVSRGRDSpec(clusterName string, tgtVSRG *rmn.VolSync
 
 	if vsrg.Spec.ReplicationState == rmn.Primary {
 		vsrg.Spec.RSSpec = tgtVSRG.Spec.RSSpec
-	} else if vsrg.Spec.ReplicationState != rmn.Secondary {
+	} else if vsrg.Spec.ReplicationState == rmn.Secondary {
 		vsrg.Spec.RDSpec = tgtVSRG.Spec.RDSpec
 	} else {
 		d.log.Info(fmt.Sprintf("VSRG %s is neither primary nor secondary on this cluster %s", vsrg.Name, mw.Namespace))
