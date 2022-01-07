@@ -735,14 +735,19 @@ func (r *DRPlacementControlReconciler) finalizeDRPC(ctx context.Context, drpc *r
 		clustersToClean = append(clustersToClean, drpc.Spec.FailoverCluster)
 	}
 
+	replGroupType := rmnutil.MWTypeVRG
+	if drpc.Spec.VolumeReplicationPlugin == rmn.VolSync {
+		replGroupType = rmnutil.MWTypeVSRG
+	}
+
 	// delete manifestworks (VRG)
 	for idx := range clustersToClean {
-		err := mwu.DeleteManifestWorksForCluster(clustersToClean[idx])
+		err := mwu.DeleteManifestWorksForCluster(clustersToClean[idx], replGroupType)
 		if err != nil {
 			return fmt.Errorf("%w", err)
 		}
 
-		mcvName := BuildManagedClusterViewName(drpc.Name, drpc.Namespace, rmnutil.MWTypeVRG)
+		mcvName := BuildManagedClusterViewName(drpc.Name, drpc.Namespace, replGroupType)
 		// Delete MCV for the VRG
 		err = r.deleteManagedClusterView(clustersToClean[idx], mcvName)
 		if err != nil {

@@ -451,9 +451,9 @@ func (v *VSRGInstance) updateReplicationClassList() error {
 
 // finalizeVRG cleans up managed resources and removes the VolSync finalizer for resource deletion
 func (v *VSRGInstance) processForDeletion() (ctrl.Result, error) {
-	v.log.Info("Entering processing VolSyncReplicationGroup")
+	v.log.Info("Entering processing VolSyncReplicationGroup for deletion")
 
-	defer v.log.Info("Exiting processing VolSyncReplicationGroup")
+	defer v.log.Info("Exiting processing VolSyncReplicationGroup for deletion")
 
 	if !containsString(v.instance.ObjectMeta.Finalizers, VsrgFinalizerName) {
 		v.log.Info("Finalizer missing from resource", "finalizer", VsrgFinalizerName)
@@ -487,7 +487,6 @@ func (v *VSRGInstance) processAsPrimary() (ctrl.Result, error) {
 
 	defer v.log.Info("Exiting processing VolSyncReplicationGroup")
 
-	//TODO: this is done for processAsSecondary too - move to processVolSync() (parent func)
 	if err := v.addFinalizer(VsrgFinalizerName); err != nil {
 		v.log.Error(err, "Failed to add finalizer", "finalizer", VsrgFinalizerName)
 
