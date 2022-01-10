@@ -168,7 +168,7 @@ func (d *DRPCInstance) ensureVolSyncReplicationSetup(homeCluster string) error {
 		return err
 	}
 
-	return d.ensureRepliationSource(homeCluster)
+	return d.ensureReplicationSource(homeCluster)
 }
 
 func (d *DRPCInstance) ensureReplicationDestination(sourceCluster string) error {
@@ -222,18 +222,17 @@ func (d *DRPCInstance) updateDestinationVSRG(clusterName string, srcVSRG *rmn.Vo
 	dstVSRG.Spec.RDSpec = nil
 	for _, volSyncPVC := range srcVSRG.Status.VolSyncPVCs {
 		rdSpec := rmn.ReplicationDestinationSpec{
-			PVCName:          volSyncPVC.Name,
-			Capacity:         volSyncPVC.Capacity,
-			StorageClassName: volSyncPVC.StorageClassName,
+			VolSyncPVCInfo: volSyncPVC,
+			SSHKeys:        "test-volsync-ssh-keys", //FIXME:
 		}
 
 		dstVSRG.Spec.RDSpec = append(dstVSRG.Spec.RDSpec, rdSpec)
 	}
 
-	return d.reconciler.Update(d.ctx, dstVSRG)
+	return d.updateVSRGSpec(clusterName, dstVSRG)
 }
 
-func (d *DRPCInstance) ensureRepliationSource(sourceCluster string) error {
+func (d *DRPCInstance) ensureReplicationSource(sourceCluster string) error {
 	const maxNumberOfVSRG = 2
 	if len(d.vrgs) != maxNumberOfVSRG {
 		return fmt.Errorf("wrong number of VRGS %v", d.vrgs)
@@ -280,13 +279,13 @@ func (d *DRPCInstance) updateSourceVSRG(clusterName string, srcVSRG *rmn.VolSync
 		rsSpec := rmn.ReplicationSourceSpec{
 			PVCName: rdInfo.PVCName,
 			Address: rdInfo.Address,
-			SSHKeys: "MY_SSH_KEYS_REF",
+			SSHKeys: "test-volsync-ssh-keys", //FIXME:
 		}
 
 		srcVSRG.Spec.RSSpec = append(srcVSRG.Spec.RSSpec, rsSpec)
 	}
 
-	return d.reconciler.Update(d.ctx, srcVSRG)
+	return d.updateVSRGSpec(clusterName, srcVSRG)
 }
 
 func (d *DRPCInstance) getHomeCluster() (string, string) {
@@ -339,23 +338,31 @@ func (d *DRPCInstance) isUserPlRuleUpdated(homeCluster string) bool {
 func (d *DRPCInstance) isVRGAlreadyDeployedOnTargetCluster(targetCluster string) bool {
 	d.log.Info(fmt.Sprintf("isAlreadyDeployedAndProtected? - %q", reflect.ValueOf(d.vrgs).MapKeys()))
 
-	return d.getCachedVRG(targetCluster) != nil
+	return d.isVRGExists(targetCluster)
 }
 
-func (d *DRPCInstance) getCachedVRG(clusterName string) *rmn.VolumeReplicationGroup {
-	vrg, found := d.getVRG(clusterName)
+func (d *DRPCInstance) isVRGExists(clusterName string) bool {
+	_, found := d.getVRG(clusterName)
 	if !found {
-		d.log.Info("VRG not found on cluster", "Name", clusterName)
+		_, found := d.getVSRG(clusterName)
+		if !found {
+			d.log.Info("VRG not found on cluster", "Name", clusterName)
 
-		return nil
+			return false
+		}
 	}
 
-	return vrg
+	return true
 }
 
 func (d *DRPCInstance) isVRGAlreadyDeployedElsewhere(clusterToSkip string) (string, bool) {
-	for clusterName := range d.vrgs {
+	for clusterName, obj := range d.vrgs {
 		if clusterName == clusterToSkip {
+			continue
+		}
+
+		_, ok := obj.(*rmn.VolSyncReplicationGroup)
+		if ok {
 			continue
 		}
 
@@ -400,16 +407,25 @@ func (d *DRPCInstance) startDeploying(homeCluster, homeClusterNamespace string) 
 }
 
 func (d *DRPCInstance) createManifestWorkForPlugin(homeCluster string) error {
+	if d.instance.Spec.VolumeReplicationPlugin == rmn.VolSync {
+		// For VolSync we need to ensure namespace on all clusters
+		for _, drCluster := range d.drPolicy.Spec.DRClusterSet {
+			err := d.ensureNamespaceExistsOnManagedCluster(drCluster.Name)
+			if err != nil {
+				return fmt.Errorf("Creating ManifestWork couldn't ensure namespace '%s' on cluster %s exists",
+					d.instance.Namespace, drCluster.Name)
+			}
+		}
+
+		// Create ManifestWorks for the source (home) cluster and destination (peer) cluster(s)
+		return d.createVolSyncManifestWorks(homeCluster)
+	}
+
 	// TODO: check if VRG MW here as a less expensive way to validate if Namespace exists
 	err := d.ensureNamespaceExistsOnManagedCluster(homeCluster)
 	if err != nil {
 		return fmt.Errorf("Creating ManifestWork couldn't ensure namespace '%s' on cluster %s exists",
 			d.instance.Namespace, homeCluster)
-	}
-
-	if d.instance.Spec.VolumeReplicationPlugin == rmn.VolSync {
-		// Create ManifestWorks for the source (home) cluster and destination (peer) cluster(s)
-		return d.createVolSyncManifestWorks(homeCluster)
 	}
 
 	// Create VRG first, to leverage user PlacementRule decision to skip placement and move to cleanup
@@ -432,6 +448,10 @@ func (d *DRPCInstance) createVolSyncManifestWorks(homeCluster string) error {
 	// Create or update ManifestWork for all the peers
 	for _, drCluster := range d.drPolicy.Spec.DRClusterSet {
 		peerCluster := drCluster.Name
+		if peerCluster == homeCluster {
+			continue
+		}
+
 		if err := d.mwu.CreateOrUpdateVolSyncManifestWork(
 			d.instance.Name, d.instance.Namespace,
 			peerCluster, d.drPolicy,
@@ -922,6 +942,22 @@ func (d *DRPCInstance) getVRGFromManifestWork(clusterName string) (*rmn.VolumeRe
 	return vrg, nil
 }
 
+func (d *DRPCInstance) getVSRGFromManifestWork(clusterName string) (*rmn.VolSyncReplicationGroup, error) {
+	vsrgMWName := d.mwu.BuildManifestWorkName(rmnutil.MWTypeVSRG)
+
+	mw, err := d.mwu.FindManifestWork(vsrgMWName, clusterName)
+	if err != nil {
+		return nil, fmt.Errorf("%w", err)
+	}
+
+	vsrg, err := d.extractVSRGFromManifestWork(mw)
+	if err != nil {
+		return nil, err
+	}
+
+	return vsrg, nil
+}
+
 func (d *DRPCInstance) hasAlreadySwitchedOver(targetCluster string) bool {
 	if len(d.userPlacementRule.Status.Decisions) > 0 &&
 		targetCluster == d.userPlacementRule.Status.Decisions[0].ClusterName {
@@ -1055,20 +1091,20 @@ func (d *DRPCInstance) createVRGManifestWork(homeCluster string) error {
 	return nil
 }
 
-func (d *DRPCInstance) ensureNamespaceExistsOnManagedCluster(homeCluster string) error {
+func (d *DRPCInstance) ensureNamespaceExistsOnManagedCluster(cluster string) error {
 	// verify namespace exists on target cluster
-	namespaceExists, err := d.namespaceExistsOnManagedCluster(homeCluster)
+	namespaceExists, err := d.namespaceExistsOnManagedCluster(cluster)
 
 	d.log.Info(fmt.Sprintf("createVRGManifestWork: namespace '%s' exists on cluster %s: %t",
-		d.instance.Namespace, homeCluster, namespaceExists))
+		d.instance.Namespace, cluster, namespaceExists))
 
 	if !namespaceExists { // attempt to create it
-		err := d.mwu.CreateOrUpdateNamespaceManifest(d.instance.Name, d.instance.Namespace, homeCluster)
+		err := d.mwu.CreateOrUpdateNamespaceManifest(d.instance.Name, d.instance.Namespace, cluster)
 		if err != nil {
-			return fmt.Errorf("failed to create namespace '%s' on cluster %s: %w", d.instance.Namespace, homeCluster, err)
+			return fmt.Errorf("failed to create namespace '%s' on cluster %s: %w", d.instance.Namespace, cluster, err)
 		}
 
-		d.log.Info(fmt.Sprintf("Created Namespace '%s' on cluster %s", d.instance.Namespace, homeCluster))
+		d.log.Info(fmt.Sprintf("Created Namespace '%s' on cluster %s", d.instance.Namespace, cluster))
 
 		return nil // created namespace
 	}
@@ -1076,7 +1112,7 @@ func (d *DRPCInstance) ensureNamespaceExistsOnManagedCluster(homeCluster string)
 	// namespace exists already
 	if err != nil {
 		return fmt.Errorf("failed to verify if namespace '%s' on cluster %s exists: %w",
-			d.instance.Namespace, homeCluster, err)
+			d.instance.Namespace, cluster, err)
 	}
 
 	return nil
@@ -1226,7 +1262,7 @@ func (d *DRPCInstance) ensureVRGManifestWorkOnClusterDeleted(clusterName string)
 	// d.log.Info("VRG ManifestWork is in Applied state", "name", mw.Name, "cluster", clusterName)
 
 	if d.ensureVRGIsSecondaryOnCluster(clusterName) {
-		err := d.mwu.DeleteManifestWorksForCluster(clusterName)
+		err := d.mwu.DeleteManifestWorksForCluster(clusterName, rmnutil.MWTypeVRG)
 		if err != nil {
 			return !done, fmt.Errorf("%w", err)
 		}
@@ -1469,6 +1505,74 @@ func (d *DRPCInstance) extractVRGFromManifestWork(mw *ocmworkv1.ManifestWork) (*
 	}
 
 	return vrg, nil
+}
+
+func (d *DRPCInstance) updateVSRGSpec(clusterName string, tgtVSRG *rmn.VolSyncReplicationGroup) error {
+	vsrgMWName := d.mwu.BuildManifestWorkName(rmnutil.MWTypeVSRG)
+	d.log.Info(fmt.Sprintf("Updating RDSpec for VSRG that is ownedby MW %s for cluster %s", vsrgMWName, clusterName))
+
+	mw, err := d.mwu.FindManifestWork(vsrgMWName, clusterName)
+	if err != nil {
+		if errors.IsNotFound(err) {
+			return nil
+		}
+
+		d.log.Error(err, "failed to update VSRG")
+
+		return fmt.Errorf("failed to update VRG %s, in namespace %s (%w)",
+			vsrgMWName, clusterName, err)
+	}
+
+	vsrg, err := d.extractVSRGFromManifestWork(mw)
+	if err != nil {
+		d.log.Error(err, "failed to update VSRG state")
+
+		return err
+	}
+
+	if vsrg.Spec.ReplicationState == rmn.Primary {
+		vsrg.Spec.RSSpec = tgtVSRG.Spec.RSSpec
+	} else if vsrg.Spec.ReplicationState == rmn.Secondary {
+		vsrg.Spec.RDSpec = tgtVSRG.Spec.RDSpec
+	} else {
+		d.log.Info(fmt.Sprintf("VSRG %s is neither primary nor secondary on this cluster %s", vsrg.Name, mw.Namespace))
+
+		return fmt.Errorf("failed to update MW due to wrong state")
+	}
+
+	vsrgClientManifest, err := d.mwu.GenerateManifest(vsrg)
+	if err != nil {
+		d.log.Error(err, "failed to generate manifest")
+
+		return fmt.Errorf("failed to generate VSRG manifest (%w)", err)
+	}
+
+	mw.Spec.Workload.Manifests[0] = *vsrgClientManifest
+
+	err = d.reconciler.Update(d.ctx, mw)
+	if err != nil {
+		return fmt.Errorf("failed to update MW (%w)", err)
+	}
+
+	d.log.Info(fmt.Sprintf("Updated VSRG running in cluster %s. VSRG (%v)", clusterName, vsrg))
+
+	return nil
+}
+
+func (d *DRPCInstance) extractVSRGFromManifestWork(mw *ocmworkv1.ManifestWork) (*rmn.VolSyncReplicationGroup, error) {
+	if len(mw.Spec.Workload.Manifests) == 0 {
+		return nil, fmt.Errorf("invalid VSRG ManifestWork for type: %s", mw.Name)
+	}
+
+	vsrgClientManifest := &mw.Spec.Workload.Manifests[0]
+	vsrg := &rmn.VolSyncReplicationGroup{}
+
+	err := yaml.Unmarshal(vsrgClientManifest.RawExtension.Raw, &vsrg)
+	if err != nil {
+		return nil, fmt.Errorf("unable to unmarshal VSRG object (%w)", err)
+	}
+
+	return vsrg, nil
 }
 
 func (d *DRPCInstance) advanceToNextDRState() {
