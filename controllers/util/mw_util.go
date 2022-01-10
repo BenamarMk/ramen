@@ -52,9 +52,9 @@ const (
 	ManifestWorkNameFormat string = "%s-%s-%s-mw"
 
 	// ManifestWork Types
-	MWTypeVRG string = "vrg"
+	MWTypeVRG  string = "vrg"
 	MWTypeVSRG string = "vsrg"
-	MWTypeNS  string = "ns"
+	MWTypeNS   string = "ns"
 
 	// Annotations for MW and PlacementRule
 	DRPCNameAnnotation      = "drplacementcontrol.ramendr.openshift.io/drpc-name"
@@ -140,21 +140,21 @@ func (mwu *MWUtil) CreateOrUpdateVRGManifestWork(
 }
 
 func (mwu *MWUtil) CreateOrUpdateVolSyncManifestWork(
-	name, namespace, homeCluster string,
+	name, namespace, cluster string,
 	drPolicy *rmn.DRPolicy, pvcSelector metav1.LabelSelector, repState rmn.ReplicationState) error {
 	schedulingInterval := drPolicy.Spec.SchedulingInterval
 	replClassSelector := drPolicy.Spec.ReplicationClassSelector
 
 	mwu.Log.Info(fmt.Sprintf("Create or Update VolSync manifestwork %s:%s:%s",
-		name, namespace, homeCluster))
+		name, namespace, cluster))
 
-	manifestWork, err := mwu.generateVolSyncManifestWork(name, namespace, homeCluster,
+	manifestWork, err := mwu.generateVolSyncManifestWork(name, namespace, cluster,
 		pvcSelector, schedulingInterval, replClassSelector, repState)
 	if err != nil {
 		return err
 	}
 
-	return mwu.createOrUpdateManifestWork(manifestWork, homeCluster)
+	return mwu.createOrUpdateManifestWork(manifestWork, cluster)
 }
 
 func (mwu *MWUtil) generateVRGManifestWork(
@@ -172,7 +172,7 @@ func (mwu *MWUtil) generateVRGManifestWork(
 	manifests := []ocmworkv1.Manifest{*vrgClientManifest}
 
 	return mwu.newManifestWork(
-		fmt.Sprintf(ManifestWorkNameFormat, name, namespace, MWTypeVRG),
+		ManifestWorkName(name, namespace, MWTypeVRG),
 		homeCluster,
 		map[string]string{"app": "VRG"},
 		manifests), nil
@@ -193,9 +193,9 @@ func (mwu *MWUtil) generateVolSyncManifestWork(
 	manifests := []ocmworkv1.Manifest{*vrgClientManifest}
 
 	return mwu.newManifestWork(
-		fmt.Sprintf(ManifestWorkNameFormat, name, namespace, MWTypeVSRG),
+		ManifestWorkName(name, namespace, MWTypeVSRG),
 		homeCluster,
-		map[string]string{"app": "VRG"},
+		map[string]string{"app": "VSRG"},
 		manifests), nil
 }
 
@@ -360,7 +360,7 @@ func (mwu *MWUtil) generateVRGClusterRoleManifest() (*ocmworkv1.Manifest, error)
 		Rules: []rbacv1.PolicyRule{
 			{
 				APIGroups: []string{"ramendr.openshift.io"},
-				Resources: []string{"volumereplicationgroups","volsyncreplicationgroups"},
+				Resources: []string{"volumereplicationgroups", "volsyncreplicationgroups"},
 				Verbs:     []string{"create", "get", "list", "update", "delete"},
 			},
 		},
@@ -453,13 +453,13 @@ func (mwu *MWUtil) createOrUpdateManifestWork(
 	return nil
 }
 
-func (mwu *MWUtil) DeleteManifestWorksForCluster(clusterName string) error {
-	// VRG
-	err := mwu.deleteManifestWorkWrapper(clusterName, MWTypeVRG)
+func (mwu *MWUtil) DeleteManifestWorksForCluster(clusterName string, mwType string) error {
+	// VRG/VSRG
+	err := mwu.deleteManifestWorkWrapper(clusterName, mwType)
 	if err != nil {
-		mwu.Log.Error(err, "failed to delete MW for VRG")
+		mwu.Log.Error(err, "failed to delete MW", "mwType", mwType)
 
-		return fmt.Errorf("failed to delete ManifestWork for VRG in namespace %s (%w)", clusterName, err)
+		return fmt.Errorf("failed to delete ManifestWork for %s in namespace %s (%w)", mwType, clusterName, err)
 	}
 
 	// The ManifestWork that created a Namespace is intentionally left on the server

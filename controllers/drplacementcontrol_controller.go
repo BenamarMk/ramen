@@ -85,7 +85,7 @@ func (m ManagedClusterViewGetterImpl) GetVRGFromManagedCluster(
 	logger := ctrl.Log.WithName("MCV").WithValues("resouceName", resourceName)
 	// get VRG and verify status through ManagedClusterView
 	mcvMeta := metav1.ObjectMeta{
-		Name:      BuildManagedClusterViewName(resourceName, resourceNamespace, "vrg"),
+		Name:      BuildManagedClusterViewName(resourceName, resourceNamespace, rmnutil.MWTypeVRG),
 		Namespace: managedCluster,
 		Annotations: map[string]string{
 			rmnutil.DRPCNameAnnotation:      resourceName,
@@ -111,7 +111,7 @@ func (m ManagedClusterViewGetterImpl) GetVSRGFromManagedCluster(
 	logger := ctrl.Log.WithName("MCV").WithValues("resouceName", resourceName)
 	// get VRG and verify status through ManagedClusterView
 	mcvMeta := metav1.ObjectMeta{
-		Name:      BuildManagedClusterViewName(resourceName, resourceNamespace, "vsrg"),
+		Name:      BuildManagedClusterViewName(resourceName, resourceNamespace, rmnutil.MWTypeVSRG),
 		Namespace: managedCluster,
 		Annotations: map[string]string{
 			rmnutil.DRPCNameAnnotation:      resourceName,
@@ -735,14 +735,19 @@ func (r *DRPlacementControlReconciler) finalizeDRPC(ctx context.Context, drpc *r
 		clustersToClean = append(clustersToClean, drpc.Spec.FailoverCluster)
 	}
 
+	replGroupType := rmnutil.MWTypeVRG
+	if drpc.Spec.VolumeReplicationPlugin == rmn.VolSync {
+		replGroupType = rmnutil.MWTypeVSRG
+	}
+
 	// delete manifestworks (VRG)
 	for idx := range clustersToClean {
-		err := mwu.DeleteManifestWorksForCluster(clustersToClean[idx])
+		err := mwu.DeleteManifestWorksForCluster(clustersToClean[idx], replGroupType)
 		if err != nil {
 			return fmt.Errorf("%w", err)
 		}
 
-		mcvName := BuildManagedClusterViewName(drpc.Name, drpc.Namespace, rmnutil.MWTypeVRG)
+		mcvName := BuildManagedClusterViewName(drpc.Name, drpc.Namespace, replGroupType)
 		// Delete MCV for the VRG
 		err = r.deleteManagedClusterView(clustersToClean[idx], mcvName)
 		if err != nil {
@@ -1082,20 +1087,38 @@ func (r *DRPlacementControlReconciler) updateDRPCStatus(
 	r.Log.Info("Updating DRPC status")
 
 	if usrPlRule != nil && len(usrPlRule.Status.Decisions) != 0 {
-		vrg, err := r.MCVGetter.GetVRGFromManagedCluster(drpc.Name, drpc.Namespace,
-			usrPlRule.Status.Decisions[0].ClusterName)
-		if err != nil {
-			// VRG must have been deleted if the error is NotFound. In either case,
-			// we don't have a VRG
-			r.Log.Info("Failed to get VRG from managed cluster", "errMsg", err)
+		if drpc.Spec.VolumeReplicationPlugin == rmn.VolSync {
+			vsrg, err := r.MCVGetter.GetVSRGFromManagedCluster(drpc.Name, drpc.Namespace,
+				usrPlRule.Status.Decisions[0].ClusterName)
 
-			drpc.Status.ResourceConditions = rmn.VRGConditions{}
+			if err != nil {
+				// VSRG must have been deleted if the error is NotFound. In either case,
+				// we don't have a VSRG
+				r.Log.Info("Failed to get VSRG from managed cluster", "errMsg", err)
+				drpc.Status.ResourceConditions = rmn.VRGConditions{}
+			} else {
+				drpc.Status.ResourceConditions.ResourceMeta.Kind = vsrg.Kind
+				drpc.Status.ResourceConditions.ResourceMeta.Name = vsrg.Name
+				drpc.Status.ResourceConditions.ResourceMeta.Namespace = vsrg.Namespace
+				drpc.Status.ResourceConditions.ResourceMeta.Generation = vsrg.Generation
+				drpc.Status.ResourceConditions.Conditions = vsrg.Status.Conditions
+			}
 		} else {
-			drpc.Status.ResourceConditions.ResourceMeta.Kind = vrg.Kind
-			drpc.Status.ResourceConditions.ResourceMeta.Name = vrg.Name
-			drpc.Status.ResourceConditions.ResourceMeta.Namespace = vrg.Namespace
-			drpc.Status.ResourceConditions.ResourceMeta.Generation = vrg.Generation
-			drpc.Status.ResourceConditions.Conditions = vrg.Status.Conditions
+			vrg, err := r.MCVGetter.GetVRGFromManagedCluster(drpc.Name, drpc.Namespace,
+				usrPlRule.Status.Decisions[0].ClusterName)
+
+			if err != nil {
+				// VRG must have been deleted if the error is NotFound. In either case,
+				// we don't have a VRG
+				r.Log.Info("Failed to get VRG from managed cluster", "errMsg", err)
+				drpc.Status.ResourceConditions = rmn.VRGConditions{}
+			} else {
+				drpc.Status.ResourceConditions.ResourceMeta.Kind = vrg.Kind
+				drpc.Status.ResourceConditions.ResourceMeta.Name = vrg.Name
+				drpc.Status.ResourceConditions.ResourceMeta.Namespace = vrg.Namespace
+				drpc.Status.ResourceConditions.ResourceMeta.Generation = vrg.Generation
+				drpc.Status.ResourceConditions.Conditions = vrg.Status.Conditions
+			}
 		}
 	}
 
