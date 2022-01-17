@@ -176,7 +176,7 @@ func (f FakeMCVGetter) GetVRGFromManagedCluster(
 	switch getFunctionNameAtIndex(2) {
 	case "updateDRPCStatus":
 		return vrg, nil
-	case "checkPVsHaveBeenRestored":
+	case "checkPVsHaveBeenRestoredForVolRep":
 		if restorePVs {
 			vrg.Status.Conditions[0].Type = controllers.VRGConditionTypeClusterDataReady
 			vrg.Status.Conditions[0].Reason = controllers.VRGConditionReasonClusterDataRestored

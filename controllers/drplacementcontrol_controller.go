@@ -499,7 +499,7 @@ func (r *DRPlacementControlReconciler) Reconcile(ctx context.Context, req ctrl.R
 	err := r.APIReader.Get(ctx, req.NamespacedName, drpc)
 	if err != nil {
 		if errors.IsNotFound(err) {
-			logger.Info(fmt.Sprintf("DRCP object not found %v", req.NamespacedName))
+			logger.Info(fmt.Sprintf("DRPC object not found %v", req.NamespacedName))
 			// Request object not found, could have been deleted after reconcile request.
 			return ctrl.Result{}, nil
 		}
@@ -711,7 +711,7 @@ func (r *DRPlacementControlReconciler) processDeletion(ctx context.Context,
 }
 
 func (r *DRPlacementControlReconciler) finalizeDRPC(ctx context.Context, drpc *rmn.DRPlacementControl) error {
-	r.Log.Info("Finalizing DRPC")
+	r.Log.Info("Finalizing DRPC", "drpc", drpc)
 
 	clonedPlRuleName := fmt.Sprintf(ClonedPlacementRuleNameFormat, drpc.Name, drpc.Namespace)
 	mwu := rmnutil.MWUtil{Client: r.Client, Ctx: ctx, Log: r.Log, InstName: drpc.Name, InstNamespace: drpc.Namespace}
@@ -730,33 +730,33 @@ func (r *DRPlacementControlReconciler) finalizeDRPC(ctx context.Context, drpc *r
 		}
 	}
 
-	clustersToClean := []string{preferredCluster}
-	if drpc.Spec.FailoverCluster != "" {
-		clustersToClean = append(clustersToClean, drpc.Spec.FailoverCluster)
-	}
-
 	replGroupType := rmnutil.MWTypeVRG
 	if drpc.Spec.VolumeReplicationPlugin == rmn.VolSync {
 		replGroupType = rmnutil.MWTypeVSRG
 	}
 
-	// delete manifestworks (VRG)
-	for idx := range clustersToClean {
-		err := mwu.DeleteManifestWorksForCluster(clustersToClean[idx], replGroupType)
+	drPolicy, err := r.getDRPolicy(ctx, drpc.Spec.DRPolicyRef.Name, drpc.Spec.DRPolicyRef.Namespace)
+	if err != nil {
+		return fmt.Errorf("failed to get DRPolicy %w", err)
+	}
+
+	// delete manifestworks (VRG/VSRG)
+	for _, drCluster := range drPolicy.Spec.DRClusterSet {
+		err := mwu.DeleteManifestWorksForCluster(drCluster.Name, replGroupType)
 		if err != nil {
 			return fmt.Errorf("%w", err)
 		}
 
 		mcvName := BuildManagedClusterViewName(drpc.Name, drpc.Namespace, replGroupType)
 		// Delete MCV for the VRG
-		err = r.deleteManagedClusterView(clustersToClean[idx], mcvName)
+		err = r.deleteManagedClusterView(drCluster.Name, mcvName)
 		if err != nil {
 			return err
 		}
 
 		mcvName = BuildManagedClusterViewName(drpc.Name, drpc.Namespace, rmnutil.MWTypeNS)
 		// Delete MCV for Namespace
-		err = r.deleteManagedClusterView(clustersToClean[idx], mcvName)
+		err = r.deleteManagedClusterView(drCluster.Name, mcvName)
 		if err != nil {
 			return err
 		}
@@ -959,11 +959,11 @@ func (r *DRPlacementControlReconciler) getVRGsFromManagedClusters(drpc *rmn.DRPl
 	resources := make(map[string]interface{})
 	for _, drCluster := range drPolicy.Spec.DRClusterSet {
 		// Only fetch failover cluster VRG if action is Failover
-		if drpc.Spec.Action == rmn.ActionFailover && drpc.Spec.FailoverCluster != drCluster.Name {
-			r.Log.Info("Skipping fetching VRG", "cluster", drCluster.Name)
+		//if drpc.Spec.Action == rmn.ActionFailover && drpc.Spec.FailoverCluster != drCluster.Name {
+		//	r.Log.Info("Skipping fetching VRG", "cluster", drCluster.Name)
 
-			continue
-		}
+		//	continue
+		//}
 
 		var resource interface{}
 		var err error

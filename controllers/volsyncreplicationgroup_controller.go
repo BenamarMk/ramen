@@ -338,10 +338,7 @@ func (v *VSRGInstance) processVolSync() (ctrl.Result, error) {
 }
 
 func (v *VSRGInstance) initializeStatus() {
-	// create ProtectedPVCs map for status
-	if v.instance.Status.VolSyncPVCs == nil {
-		v.instance.Status.VolSyncPVCs = []ramendrv1alpha1.VolSyncPVCInfo{}
-
+	if v.instance.Status.Conditions == nil {
 		// Set the VolSync conditions to unknown as nothing is known at this point
 		msg := "Initializing VolSyncReplicationGroup"
 		setVRGInitialCondition(&v.instance.Status.Conditions, v.instance.Generation, msg)
@@ -589,10 +586,14 @@ func (v *VSRGInstance) restorePVCs() error {
 }
 
 func (v *VSRGInstance) reconcileVolSyncAsPrimary() error {
-	// Make sure status.VolSyncPVCs matches our pvcList (bound pvcs to protect)
-	if len(v.pvcList.Items) != len(v.instance.Status.VolSyncPVCs) {
-		v.updateInstanceStatus()
+	if v.instance.Spec.RDSpec == nil {
+		v.instance.Status.RDInfo = []ramendrv1alpha1.ReplicationDestinationInfo{}
 	}
+
+	// Make sure status.VolSyncPVCs matches our pvcList (bound pvcs to protect)
+	//if len(v.pvcList.Items) != len(v.instance.Status.VolSyncPVCs) {
+	v.updateInstanceStatus()
+	//}
 
 	// Reconcile RSSpec
 	for _, rsSpec := range v.instance.Spec.RSSpec {
@@ -707,6 +708,10 @@ func (v *VSRGInstance) processAsSecondary() (ctrl.Result, error) {
 
 // reconcileVRsAsSecondary reconciles VolumeReplication resources for the VolSync as secondary
 func (v *VSRGInstance) reconcileVolSyncAsSecondary() error {
+	if v.instance.Spec.RSSpec == nil && v.instance.Spec.RDSpec == nil {
+		v.instance.Status.VolSyncPVCs = []ramendrv1alpha1.VolSyncPVCInfo{}
+	}
+
 	// Reconcile RDSpec (deletion or replication)
 	for _, rdSpec := range v.instance.Spec.RDSpec {
 		rdInfoForStatus, err := v.volSyncHandler.ReconcileRD(rdSpec)
