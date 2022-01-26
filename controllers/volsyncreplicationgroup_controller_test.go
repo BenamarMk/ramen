@@ -8,8 +8,11 @@ import (
 	. "github.com/onsi/gomega"
 
 	corev1 "k8s.io/api/core/v1"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
@@ -17,10 +20,11 @@ import (
 	volsyncv1alpha1 "github.com/backube/volsync/api/v1alpha1"
 	ramendrv1alpha1 "github.com/ramendr/ramen/api/v1alpha1"
 	"github.com/ramendr/ramen/controllers"
+	"github.com/ramendr/ramen/controllers/volsync"
 )
 
 const (
-	testMaxWait          = 20 * time.Second
+	testMaxWait          = 10 * time.Second
 	testInterval         = 250 * time.Millisecond
 	testStorageClassName = "fakestorageclass"
 )
@@ -59,7 +63,7 @@ var _ = Describe("VolsyncreplicationgroupController", func() {
 		var testVsrg *ramendrv1alpha1.VolSyncReplicationGroup
 
 		Context("When VSRG created on primary", func() {
-			JustBeforeEach(func() {
+			BeforeEach(func() {
 				testVsrg = &ramendrv1alpha1.VolSyncReplicationGroup{
 					ObjectMeta: metav1.ObjectMeta{
 						GenerateName: "test-vsrg-east-",
@@ -73,7 +77,9 @@ var _ = Describe("VolsyncreplicationgroupController", func() {
 						},
 					},
 				}
+			})
 
+			JustBeforeEach(func() {
 				Expect(k8sClient.Create(testCtx, testVsrg)).To(Succeed())
 
 				Eventually(func() []string {
@@ -133,9 +139,13 @@ var _ = Describe("VolsyncreplicationgroupController", func() {
 				})
 
 				Context("When RSSpec entries are added to vsrg spec", func() {
-					It("Should create ReplicationSources for each", func() {
+					rs0 := &volsyncv1alpha1.ReplicationSource{}
+					rs1 := &volsyncv1alpha1.ReplicationSource{}
+					rs2 := &volsyncv1alpha1.ReplicationSource{}
+
+					JustBeforeEach(func() {
 						// Update the vsrg spec with some RSSpec entries
-						testVsrg.Spec.RSSpec = []ramendrv1alpha1.ReplicationSourceSpec{
+						rsSpec := []ramendrv1alpha1.ReplicationSourceSpec{
 							{
 								PVCName: boundPvcs[0].GetName(),
 								Address: "1.2.0.10",
@@ -152,7 +162,15 @@ var _ = Describe("VolsyncreplicationgroupController", func() {
 								SSHKeys: testSshKeys,
 							},
 						}
-						Expect(k8sClient.Update(testCtx, testVsrg)).To(Succeed())
+						Eventually(func() error {
+							// Put this in Eventually loop to avoid update issues (controller is also updating the vsrg)
+							err := k8sClient.Get(testCtx, client.ObjectKeyFromObject(testVsrg), testVsrg)
+							if err != nil {
+								return err
+							}
+							testVsrg.Spec.RSSpec = rsSpec
+							return k8sClient.Update(testCtx, testVsrg)
+						}, testMaxWait, interval).Should(Succeed())
 
 						allRSs := &volsyncv1alpha1.ReplicationSourceList{}
 						Eventually(func() int {
@@ -161,32 +179,74 @@ var _ = Describe("VolsyncreplicationgroupController", func() {
 							return len(allRSs.Items)
 						}, testMaxWait, testInterval).Should(Equal(len(testVsrg.Spec.RSSpec)))
 
-						rs0 := &volsyncv1alpha1.ReplicationSource{}
 						Expect(k8sClient.Get(testCtx, types.NamespacedName{
 							Name: boundPvcs[0].GetName(), Namespace: testNamespace.GetName()}, rs0)).To(Succeed())
+						Expect(k8sClient.Get(testCtx, types.NamespacedName{
+							Name: boundPvcs[1].GetName(), Namespace: testNamespace.GetName()}, rs1)).To(Succeed())
+						Expect(k8sClient.Get(testCtx, types.NamespacedName{
+							Name: boundPvcs[2].GetName(), Namespace: testNamespace.GetName()}, rs2)).To(Succeed())
+					})
+
+					It("Should create ReplicationSources for each", func() {
 						Expect(rs0.Spec.SourcePVC).To(Equal(boundPvcs[0].GetName()))
 						Expect(*rs0.Spec.Rsync.Address).To(Equal(testVsrg.Spec.RSSpec[0].Address))
 						Expect(*rs0.Spec.Rsync.SSHKeys).To(Equal(testVsrg.Spec.RSSpec[0].SSHKeys))
 						Expect(rs0.Spec.Trigger).NotTo(BeNil())
 						Expect(*rs0.Spec.Trigger.Schedule).To(Equal("* */1 * * *")) // scheduling interval was set to 1h
 
-						rs1 := &volsyncv1alpha1.ReplicationSource{}
-						Expect(k8sClient.Get(testCtx, types.NamespacedName{
-							Name: boundPvcs[1].GetName(), Namespace: testNamespace.GetName()}, rs1)).To(Succeed())
 						Expect(rs1.Spec.SourcePVC).To(Equal(boundPvcs[1].GetName()))
 						Expect(*rs1.Spec.Rsync.Address).To(Equal(testVsrg.Spec.RSSpec[1].Address))
 						Expect(*rs1.Spec.Rsync.SSHKeys).To(Equal(testVsrg.Spec.RSSpec[1].SSHKeys))
 						Expect(rs1.Spec.Trigger).NotTo(BeNil())
 						Expect(*rs1.Spec.Trigger.Schedule).To(Equal("* */1 * * *")) // scheduling interval was set to 1h
 
-						rs2 := &volsyncv1alpha1.ReplicationSource{}
-						Expect(k8sClient.Get(testCtx, types.NamespacedName{
-							Name: boundPvcs[2].GetName(), Namespace: testNamespace.GetName()}, rs2)).To(Succeed())
 						Expect(rs2.Spec.SourcePVC).To(Equal(boundPvcs[2].GetName()))
 						Expect(*rs2.Spec.Rsync.Address).To(Equal(testVsrg.Spec.RSSpec[2].Address))
 						Expect(*rs2.Spec.Rsync.SSHKeys).To(Equal(testVsrg.Spec.RSSpec[2].SSHKeys))
 						Expect(rs2.Spec.Trigger).NotTo(BeNil())
 						Expect(*rs2.Spec.Trigger.Schedule).To(Equal("* */1 * * *")) // scheduling interval was set to 1h
+					})
+
+					// Note this is technically a relocate since the RSSpec[] is not empty
+					Context("When relocate/failover occurs (primary becomes secondary)", func() {
+						JustBeforeEach(func() {
+							// JustBeforeEach in parent tests (see outer contexts) are already setting up
+							// the VSRG with RSSpec and corresponding ReplicationSources are created
+
+							// Now update VSRG to indicate failover (change from Primary to Secondary)
+							Eventually(func() error {
+								// Put this in Eventually loop to avoid update issues (controller is also updating the vsrg)
+								err := k8sClient.Get(testCtx, client.ObjectKeyFromObject(testVsrg), testVsrg)
+								if err != nil {
+									return err
+								}
+								testVsrg.Spec.ReplicationState = ramendrv1alpha1.Secondary
+								return k8sClient.Update(testCtx, testVsrg)
+							}, testMaxWait, interval).Should(Succeed())
+						})
+
+						It("Should run a final synchronization on the ReplicationSources previously created", func() {
+							// Controller should try to run a final sync, re-load the RSs to check
+							Eventually(func() bool {
+								rsList := []*volsyncv1alpha1.ReplicationSource{rs0, rs1, rs2}
+								for _, rs := range rsList {
+									err := k8sClient.Get(testCtx, client.ObjectKeyFromObject(rs), rs)
+									if err != nil {
+										return false
+									}
+									if rs.Spec.Trigger == nil || rs.Spec.Trigger.Manual == "" {
+										return false
+									}
+								}
+								return true
+							}, testMaxWait, testInterval).Should(BeTrue())
+
+							Expect(rs0.Spec.Trigger.Manual).To(Equal(volsync.FinalSyncTriggerString))
+							Expect(rs1.Spec.Trigger.Manual).To(Equal(volsync.FinalSyncTriggerString))
+							Expect(rs2.Spec.Trigger.Manual).To(Equal(volsync.FinalSyncTriggerString))
+
+							//TODO: get status from VSRG to indicate that final syncs are done
+						})
 					})
 				})
 			})
@@ -247,8 +307,12 @@ var _ = Describe("VolsyncreplicationgroupController", func() {
 				rd1 := &volsyncv1alpha1.ReplicationDestination{}
 
 				JustBeforeEach(func() {
+					// Putting this in JustBeforeEach instead of BeforeEach because we want the VSRG to have been
+					// created first with no RDSpec entries, then updated with RDSpec entries afterwards.
+					// This is to simulate what we expect to see in practice.
+
 					// Update the vsrg spec with some RDSpec entries
-					testVsrg.Spec.RDSpec = []ramendrv1alpha1.ReplicationDestinationSpec{
+					rdSpec := []ramendrv1alpha1.ReplicationDestinationSpec{
 						{
 							VolSyncPVCInfo: ramendrv1alpha1.VolSyncPVCInfo{
 								PVCName:          "testingpvc-a",
@@ -270,7 +334,15 @@ var _ = Describe("VolsyncreplicationgroupController", func() {
 							SSHKeys: testSshKeys,
 						},
 					}
-					Expect(k8sClient.Update(testCtx, testVsrg)).To(Succeed())
+					Eventually(func() error {
+						// Put this in Eventually loop to avoid update issues (controller is also updating the vsrg)
+						err := k8sClient.Get(testCtx, client.ObjectKeyFromObject(testVsrg), testVsrg)
+						if err != nil {
+							return err
+						}
+						testVsrg.Spec.RDSpec = rdSpec
+						return k8sClient.Update(testCtx, testVsrg)
+					}, testMaxWait, interval).Should(Succeed())
 
 					allRDs := &volsyncv1alpha1.ReplicationDestinationList{}
 					Eventually(func() int {
@@ -326,9 +398,7 @@ var _ = Describe("VolsyncreplicationgroupController", func() {
 						}
 						Expect(k8sClient.Status().Update(testCtx, rd1)).To(Succeed())
 
-					})
-
-					It("VSRG status should be updated with proper RDInfo", func() {
+						// Wait for VSRG controller to see the update in the RDs and update VSRG status accordingly
 						Eventually(func() int {
 							err := k8sClient.Get(testCtx, client.ObjectKeyFromObject(testVsrg), testVsrg)
 							if err != nil {
@@ -336,8 +406,10 @@ var _ = Describe("VolsyncreplicationgroupController", func() {
 							}
 							return len(testVsrg.Status.RDInfo)
 						}, testMaxWait, testInterval).Should(Equal(2))
+					})
 
-						// Confirm the RDInfo is set correctly
+					It("VSRG status should be updated with proper RDInfo", func() {
+						// Confirm the RDInfo in the VSRG status is set correctly
 						foundRdInfo0 := false
 						foundRdInfo1 := false
 						for _, rdInfo := range testVsrg.Status.RDInfo {
@@ -352,6 +424,87 @@ var _ = Describe("VolsyncreplicationgroupController", func() {
 						}
 						Expect(foundRdInfo0).To(BeTrue())
 						Expect(foundRdInfo1).To(BeTrue())
+					})
+
+					Context("When failover occurs (secondary becomes primary)", func() {
+						rd0SnapName := "testsnap-rd0"
+						rd1SnapName := "testsnap-rd1"
+
+						JustBeforeEach(func() {
+							// JustBeforeEach in parent tests (see outer contexts) are already setting up
+							// the VSRG and faking out that ReplicationDestinations are complete (i.e. address
+							// specified in RD and VSRG status updated to reflect this with RDInfo for each RD).
+
+							// Fake out that the replication destinations are complete by putting a "latestImage"
+							// in the status
+							apiGrp := volsync.VolumeSnapshotGroup
+							rd0.Status.LatestImage = &corev1.TypedLocalObjectReference{
+								Kind:     volsync.VolumeSnapshotKind,
+								APIGroup: &apiGrp,
+								Name:     rd0SnapName,
+							}
+							Expect(k8sClient.Status().Update(testCtx, rd0)).To(Succeed())
+
+							rd1.Status.LatestImage = &corev1.TypedLocalObjectReference{
+								Kind:     volsync.VolumeSnapshotKind,
+								APIGroup: &apiGrp,
+								Name:     rd1SnapName,
+							}
+							Expect(k8sClient.Status().Update(testCtx, rd1)).To(Succeed())
+
+							// Create volumesnapshots that correspond to the ones we just faked out in the RD status
+							Expect(createSnapshot(testCtx,
+								rd0SnapName, testVsrg.Spec.RDSpec[0].PVCName, testNamespace.GetName())).To(Succeed())
+							Expect(createSnapshot(testCtx,
+								rd1SnapName, testVsrg.Spec.RDSpec[1].PVCName, testNamespace.GetName())).To(Succeed())
+
+							// Now update VSRG to indicate failover (change from Secondary to Primary)
+							Eventually(func() error {
+								// Put this in Eventually loop to avoid update issues (controller is also updating the vsrg)
+								err := k8sClient.Get(testCtx, client.ObjectKeyFromObject(testVsrg), testVsrg)
+								if err != nil {
+									return err
+								}
+								testVsrg.Spec.ReplicationState = ramendrv1alpha1.Primary
+								return k8sClient.Update(testCtx, testVsrg)
+							}, testMaxWait, interval).Should(Succeed())
+						})
+
+						It("Should restore PVCs from the ReplicationDestinations previously created", func() {
+							Eventually(func() bool {
+								err := k8sClient.Get(testCtx, client.ObjectKeyFromObject(testVsrg), testVsrg)
+								if err != nil {
+									return false
+								}
+								return apimeta.IsStatusConditionTrue(testVsrg.Status.Conditions,
+									controllers.VRGConditionTypeClusterDataReady)
+							}, testMaxWait, testInterval).Should(BeTrue())
+
+							// Check that PVCs were created and point to the snapshots
+							pvc0 := &corev1.PersistentVolumeClaim{
+								ObjectMeta: metav1.ObjectMeta{
+									Name:      testVsrg.Spec.RDSpec[0].PVCName,
+									Namespace: testNamespace.GetName(),
+								},
+							}
+							Eventually(func() error {
+								return k8sClient.Get(testCtx, client.ObjectKeyFromObject(pvc0), pvc0)
+							}, testMaxWait, testInterval).Should(Succeed())
+							Expect(pvc0.Spec.DataSource.Name).To(Equal(rd0SnapName))
+							Expect(pvc0.Spec.DataSource.Kind).To(Equal(volsync.VolumeSnapshotKind))
+
+							pvc1 := &corev1.PersistentVolumeClaim{
+								ObjectMeta: metav1.ObjectMeta{
+									Name:      testVsrg.Spec.RDSpec[1].PVCName,
+									Namespace: testNamespace.GetName(),
+								},
+							}
+							Eventually(func() error {
+								return k8sClient.Get(testCtx, client.ObjectKeyFromObject(pvc1), pvc1)
+							}, testMaxWait, testInterval).Should(Succeed())
+							Expect(pvc1.Spec.DataSource.Name).To(Equal(rd1SnapName))
+							Expect(pvc1.Spec.DataSource.Kind).To(Equal(volsync.VolumeSnapshotKind))
+						})
 					})
 				})
 			})
@@ -394,4 +547,26 @@ func createPVC(ctx context.Context, namespace string, labels map[string]string,
 	Expect(k8sClient.Status().Update(ctx, pvc)).To(Succeed())
 
 	return pvc
+}
+
+func createSnapshot(ctx context.Context, snapshotName, pvcName, namespace string) error {
+	volSnap := &unstructured.Unstructured{}
+	volSnap.Object = map[string]interface{}{
+		"metadata": map[string]interface{}{
+			"name":      snapshotName,
+			"namespace": namespace,
+		},
+		"spec": map[string]interface{}{
+			"source": map[string]interface{}{
+				"persistentVolumeClaimName": "fakepvcnamehere",
+			},
+		},
+	}
+	volSnap.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   volsync.VolumeSnapshotGroup,
+		Kind:    volsync.VolumeSnapshotKind,
+		Version: volsync.VolumeSnapshotVersion,
+	})
+
+	return k8sClient.Create(ctx, volSnap)
 }

@@ -168,7 +168,7 @@ func (v *VSHandler) ReconcileRS(
 			}
 		}
 
-		//TODO: VolumeSnapshotClassName
+		//TODO: VolumeSnapshotClassName or potentially Clone in some cases?
 
 		rs.Spec.Rsync = &volsyncv1alpha1.ReplicationSourceRsyncSpec{
 			SSHKeys: &rsSpec.SSHKeys,

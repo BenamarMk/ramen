@@ -563,15 +563,13 @@ func (v *VSRGInstance) restorePVCs() error {
 
 	success := true
 	for _, rdSpec := range v.instance.Spec.RDSpec {
-		//TODO: Restore volume - if failure, set success=false
+		// Restore volume - if failure, set success=false
 		err := v.volSyncHandler.EnsurePVCfromRD(rdSpec)
 		if err != nil {
 			v.log.Error(err, "Unable to ensure PVC", "rdSpec", rdSpec)
 			success = false
 			continue // Keep trying to ensure PVCs for other rdSpec
 		}
-
-		//TODO: Need any status to indicate which PVCs we've restored? - overall clusterDataReady is set below already
 	}
 
 	if !success {
@@ -580,7 +578,6 @@ func (v *VSRGInstance) restorePVCs() error {
 
 	msg = "PVC cluster data restored"
 	setVRGClusterDataReadyCondition(&v.instance.Status.Conditions, v.instance.Generation, msg)
-	v.log.Info(msg, "RDSpec", v.instance.Spec.RDSpec)
 
 	return nil
 }
@@ -733,16 +730,21 @@ func (v *VSRGInstance) reconcileVolSyncAsSecondary() error {
 	}
 
 	// This may be a relocate scenario - in which case we want to run a final sync
-	// of the PVCs we've been syncing (via ReplicationDestinations) when we were primary
-	// Trigger final sync on any ReplicationDestination in the RSSpec list
+	// of the PVCs we've been syncing (via ReplicationSources) when we were primary
+	// Trigger final sync on any ReplicationSource in the RSSpec list
+	allFinalSyncsComplete := true
 	for _, rsSpec := range v.instance.Spec.RSSpec {
-		finalSyncComplete, err := v.volSyncHandler.ReconcileRS(rsSpec, true /* Run final sync */)
+		finalSyncCompleteForRS, err := v.volSyncHandler.ReconcileRS(rsSpec, true /* Run final sync */)
 		if err != nil {
 			return err
 		}
-		if finalSyncComplete {
-			//TODO: will need to indicate status back to DRPC controller
+		if !finalSyncCompleteForRS {
+			allFinalSyncsComplete = false
 		}
+	}
+	if allFinalSyncsComplete {
+		//TODO: will need to indicate status back to DRPC controller
+		// Should this only be done if we know we're in a "relocate" scenario?
 	}
 
 	v.log.Info("Successfully reconciled VolSync as Secondary")
