@@ -359,6 +359,8 @@ func (v *VSHandler) ensurePVCFromSnapshot(rdSpec ramendrv1alpha1.ReplicationDest
 			return nil
 		}
 
+		pvc.Labels = rdSpec.Labels
+
 		accessModes := []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce} // Default value
 		if len(rdSpec.AccessModes) > 0 {
 			accessModes = rdSpec.AccessModes

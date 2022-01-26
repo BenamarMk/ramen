@@ -327,18 +327,21 @@ var _ = Describe("VolSync Handler", func() {
 		pvcCapacity := resource.MustParse("1Gi")
 		pvcStorageClassName := "teststorageclass"
 
-		rdSpec := ramendrv1alpha1.ReplicationDestinationSpec{
-			VolSyncPVCInfo: ramendrv1alpha1.VolSyncPVCInfo{
-				PVCName:          pvcName,
-				StorageClassName: &pvcStorageClassName,
-				Resources: corev1.ResourceRequirements{
-					Requests: corev1.ResourceList{
-						corev1.ResourceStorage: pvcCapacity,
+		var rdSpec ramendrv1alpha1.ReplicationDestinationSpec
+		BeforeEach(func() {
+			rdSpec = ramendrv1alpha1.ReplicationDestinationSpec{
+				VolSyncPVCInfo: ramendrv1alpha1.VolSyncPVCInfo{
+					PVCName:          pvcName,
+					StorageClassName: &pvcStorageClassName,
+					Resources: corev1.ResourceRequirements{
+						Requests: corev1.ResourceList{
+							corev1.ResourceStorage: pvcCapacity,
+						},
 					},
 				},
-			},
-			SSHKeys: "testsecret",
-		}
+				SSHKeys: "testsecret",
+			}
+		})
 
 		var ensurePVCErr error
 		JustBeforeEach(func() {
@@ -417,11 +420,11 @@ var _ = Describe("VolSync Handler", func() {
 					Expect(err).NotTo(HaveOccurred())
 				})
 
+				pvc := &corev1.PersistentVolumeClaim{}
 				JustBeforeEach(func() {
 					// Common checks for everything in this context - pvc should be created with correct spec
 					Expect(ensurePVCErr).NotTo(HaveOccurred())
 
-					pvc := &corev1.PersistentVolumeClaim{}
 					Eventually(func() error {
 						return k8sClient.Get(ctx, types.NamespacedName{
 							Name:      pvcName,
@@ -443,7 +446,7 @@ var _ = Describe("VolSync Handler", func() {
 					}))
 				})
 
-				It("PVC should be created, latestImage VolumeSnapshot should have a finalizer added", func() {
+				It("Should create PVC, latestImage VolumeSnapshot should have a finalizer added", func() {
 					Eventually(func() bool {
 						err := k8sClient.Get(ctx, types.NamespacedName{
 							Name:      latestImageSnapshotName,
@@ -457,7 +460,20 @@ var _ = Describe("VolSync Handler", func() {
 					}, maxWait, interval).Should(BeTrue())
 				})
 
-				Context("When pvc has already been created", func() {
+				Context("When pvc to be restored has labels", func() {
+					BeforeEach(func() {
+						rdSpec.Labels = map[string]string{
+							"testlabel1": "mylabel1",
+							"testlabel2": "protecthisPVC",
+						}
+					})
+
+					It("Should create PVC with labels", func() {
+						Expect(pvc.Labels).To(Equal(rdSpec.Labels))
+					})
+				})
+
+				Context("When pvc to be restored has already been created", func() {
 					It("ensure PVC should not fail", func() {
 						// Previous ensurePVC will already have created the PVC (see parent context)
 						// Now run ensurePVC again - additional runs should just ensure the PVC is ok

@@ -226,7 +226,7 @@ func filterPVCForVolSync(mgr manager.Manager, pvc *corev1.PersistentVolumeClaim,
 
 // +kubebuilder:rbac:groups=volsync.backube,resources=replicationdestinations,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=volsync.backube,resources=replicationsources,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=core,resources=persistentvolumeclaims,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups=core,resources=persistentvolumeclaims,verbs=get;list;watch;create;update;patch
 // +kubebuilder:rbac:groups=core,resources=events,verbs=get;create;patch;update
 // +kubebuilder:rbac:groups="",namespace=system,resources=secrets,verbs=get
 
@@ -623,6 +623,7 @@ func (v *VSRGInstance) updateInstanceStatus() {
 			if volSyncPVC == nil {
 				volSyncPVC := &ramendrv1alpha1.VolSyncPVCInfo{
 					PVCName:          pvc.Name,
+					Labels:           pvc.Labels,
 					StorageClassName: pvc.Spec.StorageClassName,
 					AccessModes:      pvc.Spec.AccessModes,
 					Resources:        pvc.Spec.Resources,

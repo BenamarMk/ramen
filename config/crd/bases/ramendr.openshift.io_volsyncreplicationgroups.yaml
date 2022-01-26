@@ -93,6 +93,10 @@ spec:
                       items:
                         type: string
                       type: array
+                    labels:
+                      additionalProperties:
+                        type: string
+                      type: object
                     pvcName:
                       description: Name of the PVC resource
                       type: string
@@ -318,6 +322,10 @@ spec:
                       items:
                         type: string
                       type: array
+                    labels:
+                      additionalProperties:
+                        type: string
+                      type: object
                     pvcName:
                       description: Name of the PVC resource
                       type: string

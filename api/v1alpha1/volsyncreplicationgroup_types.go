@@ -72,6 +72,8 @@ type VolSyncPVCInfo struct {
 	// Name of the PVC resource
 	PVCName string `json:"pvcName"`
 
+	Labels map[string]string `json:"labels,omitempty"`
+
 	// Name of the StorageClass required by the claim.
 	StorageClassName *string `json:"storageClassName,omitempty"`
 

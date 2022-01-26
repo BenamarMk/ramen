@@ -315,7 +315,11 @@ var _ = Describe("VolsyncreplicationgroupController", func() {
 					rdSpec := []ramendrv1alpha1.ReplicationDestinationSpec{
 						{
 							VolSyncPVCInfo: ramendrv1alpha1.VolSyncPVCInfo{
-								PVCName:          "testingpvc-a",
+								PVCName: "testingpvc-a",
+								Labels: map[string]string{
+									"drlabel":      "backmeup",
+									"anotherlabel": "abcd",
+								},
 								StorageClassName: &storageClassName,
 								AccessModes:      testAccessModes,
 
@@ -325,7 +329,11 @@ var _ = Describe("VolsyncreplicationgroupController", func() {
 						},
 						{
 							VolSyncPVCInfo: ramendrv1alpha1.VolSyncPVCInfo{
-								PVCName:          "testingpvc-b",
+								PVCName: "testingpvc-b",
+								Labels: map[string]string{
+									"drlabel": "backmeup",
+									"b-label": "blahblah",
+								},
 								StorageClassName: &storageClassName,
 								AccessModes:      testAccessModes,
 
@@ -492,6 +500,7 @@ var _ = Describe("VolsyncreplicationgroupController", func() {
 							}, testMaxWait, testInterval).Should(Succeed())
 							Expect(pvc0.Spec.DataSource.Name).To(Equal(rd0SnapName))
 							Expect(pvc0.Spec.DataSource.Kind).To(Equal(volsync.VolumeSnapshotKind))
+							Expect(pvc0.Labels).To(Equal(testVsrg.Spec.RDSpec[0].Labels))
 
 							pvc1 := &corev1.PersistentVolumeClaim{
 								ObjectMeta: metav1.ObjectMeta{
@@ -504,6 +513,7 @@ var _ = Describe("VolsyncreplicationgroupController", func() {
 							}, testMaxWait, testInterval).Should(Succeed())
 							Expect(pvc1.Spec.DataSource.Name).To(Equal(rd1SnapName))
 							Expect(pvc1.Spec.DataSource.Kind).To(Equal(volsync.VolumeSnapshotKind))
+							Expect(pvc1.Labels).To(Equal(testVsrg.Spec.RDSpec[1].Labels))
 						})
 					})
 				})

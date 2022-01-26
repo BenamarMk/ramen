@@ -567,7 +567,7 @@ func (d *DRPCInstance) runVSRGFailover() (bool, error) {
 			return !done, nil
 		}
 
-		err := d.resetRDInfoOnPrimary(d.instance.Spec.FailoverCluster)
+		err := d.resetRDInfoOnPrimary(d.instance.Spec.FailoverCluster, failoverClusterVSRG.Status)
 		if err != nil {
 			return !done, err
 		}
@@ -1665,7 +1665,7 @@ func (d *DRPCInstance) updateVRGStateToSecondary(clusterName string) error {
 	return nil
 }
 
-func (d *DRPCInstance) resetRDInfoOnPrimary(clusterName string) error {
+func (d *DRPCInstance) resetRDInfoOnPrimary(clusterName string, currentVsrgStatus rmn.VolSyncReplicationGroupStatus) error {
 	vsrgMWName := d.mwu.BuildManifestWorkName(rmnutil.MWTypeVSRG)
 	d.log.Info(fmt.Sprintf("Resetting RD Info for VSRG ownedby MW %s for cluster %s", vsrgMWName, clusterName))
 
@@ -1700,7 +1700,7 @@ func (d *DRPCInstance) resetRDInfoOnPrimary(clusterName string) error {
 		return nil
 	}
 
-	if len(vsrg.Status.VolSyncPVCs) == 0 {
+	if len(currentVsrgStatus.VolSyncPVCs) == 0 {
 		return fmt.Errorf("still waiting for bound pvc")
 	}
 
