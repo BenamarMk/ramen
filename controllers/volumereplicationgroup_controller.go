@@ -737,6 +737,7 @@ func (v *VRGInstance) updatePVCList() error {
 	}
 
 	v.log.Info(fmt.Sprintf("Found %d PVCs using matching lables %v", len(pvcList.Items), labelSelector.MatchLabels))
+
 	if !v.vrcUpdated {
 		if err := v.updateReplicationClassList(); err != nil {
 			v.log.Error(err, "Failed to get VolumeReplicationClass list")
@@ -1068,7 +1069,9 @@ func (v *VRGInstance) processAsPrimary() (ctrl.Result, error) {
 func (v *VRGInstance) handleVRGMode(state ramendrv1alpha1.ReplicationState) bool {
 	asyncNeedRequeue := false
 	syncNeedRequeue := false
+
 	v.log.Info("handle request using", "mode", v.instance.Spec.Async.Mode)
+
 	if v.instance.Spec.Async.Mode == ramendrv1alpha1.AsyncModeEnabled {
 		if state == ramendrv1alpha1.Primary {
 			asyncNeedRequeue = v.reconcileAsPrimary()

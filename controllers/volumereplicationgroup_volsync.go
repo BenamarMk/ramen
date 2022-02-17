@@ -48,16 +48,17 @@ func (v *VRGInstance) restorePVsForVolSync() error {
 	success := true
 
 	for _, rdSpec := range v.instance.Spec.VolSync.RDSpec {
-		//TODO: Restore volume - if failure, set success=false
+		// TODO: Restore volume - if failure, set success=false
 		err := v.volSyncHandler.EnsurePVCfromRD(rdSpec)
 		if err != nil {
 			v.log.Error(err, "Unable to ensure PVC", "rdSpec", rdSpec)
+
 			success = false
 
 			continue // Keep trying to ensure PVCs for other rdSpec
 		}
 
-		//TODO: Need any status to indicate which PVCs we've restored? - overall clusterDataReady is set below already
+		// TODO: Need any status to indicate which PVCs we've restored? - overall clusterDataReady is set below already
 		setVRGClusterDataReadyCondition(&v.instance.Status.Conditions, v.instance.Generation, "PVC restored")
 	}
 
@@ -99,7 +100,7 @@ func (v *VRGInstance) reconcileVolSyncAsPrimary() bool {
 			setVolSyncProtectedPVCConditionReady(&protectedPVC.Conditions, v.instance.Generation, "Protecting")
 		}
 
-		//TODO: cleanup any RS that is not in rsSpec?
+		// TODO: cleanup any RS that is not in rsSpec?
 
 		// Cleanup - this VRG is primary, cleanup if necessary
 		// remove ReplicationDestinations that would have been created when this VRG was
@@ -150,6 +151,7 @@ func (v *VRGInstance) reconcileVolSyncAsSecondary() bool {
 	// Reconcile RDSpec (deletion or replication)
 	for _, rdSpec := range v.instance.Spec.VolSync.RDSpec {
 		v.log.Info("Reconcile RD as Secondary", "RDSpec", rdSpec)
+
 		rdInfoForStatus, err := v.volSyncHandler.ReconcileRD(rdSpec)
 		if err != nil {
 			v.log.Error(err, "Failed to reconcile VolSync Replication Destination")
@@ -172,7 +174,7 @@ func (v *VRGInstance) reconcileVolSyncAsSecondary() bool {
 		return false
 	}
 
-	//TODO: cleanup any RD that is not in rdSpec? may not be necessary?
+	// TODO: cleanup any RD that is not in rdSpec? may not be necessary?
 
 	// Cleanup - this VRG is secondary, cleanup if necessary
 	// remove ReplicationSources that would have been created when this VRG was
@@ -193,8 +195,9 @@ func (v *VRGInstance) reconcileVolSyncAsSecondary() bool {
 
 			return false
 		}
+
 		if finalSyncComplete {
-			//TODO: will need to indicate status back to DRPC controller
+			// TODO: will need to indicate status back to DRPC controller
 		}
 	}
 
@@ -219,6 +222,7 @@ func (v *VRGInstance) updateStatusWithRDInfo(rdInfoForStatus ramendrv1alpha1.Vol
 			break
 		}
 	}
+
 	if !found {
 		// Append the new RDInfo to the status
 		v.instance.Status.VolSyncRepStatus.RDInfo = append(v.instance.Status.VolSyncRepStatus.RDInfo, rdInfoForStatus)
