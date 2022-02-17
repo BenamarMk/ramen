@@ -164,7 +164,7 @@ var _ = Describe("VolSync Handler", func() {
 			})
 
 			Context("When a volsyncProfile is specified with serviceType", func() {
-				var typeClusterIP = corev1.ServiceTypeClusterIP
+				typeClusterIP := corev1.ServiceTypeClusterIP
 				BeforeEach(func() {
 					vsHandler.SetVolSyncProfile(&ramendrv1alpha1.VolSyncProfile{
 						VolSyncProfileName: "default",
@@ -229,6 +229,7 @@ var _ = Describe("VolSync Handler", func() {
 							if err != nil || rdPrecreate.Status == nil || rdPrecreate.Status.Rsync == nil {
 								return nil
 							}
+
 							return rdPrecreate.Status.Rsync.Address
 						}, maxWait, interval).Should(Not(BeNil()))
 					})
@@ -331,6 +332,7 @@ var _ = Describe("VolSync Handler", func() {
 							if err != nil || createdRS.Spec.Trigger == nil {
 								return ""
 							}
+
 							return createdRS.Spec.Trigger.Manual
 						}, maxWait, interval).Should(Equal(volsync.FinalSyncTriggerString))
 
@@ -484,6 +486,7 @@ var _ = Describe("VolSync Handler", func() {
 						if err != nil {
 							return false
 						}
+
 						return len(latestImageSnap.GetFinalizers()) == 1 &&
 							latestImageSnap.GetFinalizers()[0] == volsync.VolumeSnapshotProtectFinalizerName
 					}, maxWait, interval).Should(BeTrue())
@@ -590,6 +593,7 @@ var _ = Describe("VolSync Handler", func() {
 			allRDs := &volsyncv1alpha1.ReplicationDestinationList{}
 			Eventually(func() int {
 				Expect(k8sClient.List(ctx, allRDs, client.InNamespace(testNamespace.GetName()))).To(Succeed())
+
 				return len(allRDs.Items)
 			}, maxWait, interval).Should(Equal(len(rdSpecList) + len(rdSpecListOtherOwner)))
 		})
@@ -602,6 +606,7 @@ var _ = Describe("VolSync Handler", func() {
 				rdList := &volsyncv1alpha1.ReplicationDestinationList{}
 				Eventually(func() int {
 					Expect(k8sClient.List(ctx, rdList, client.InNamespace(testNamespace.GetName()))).To(Succeed())
+
 					return len(rdList.Items)
 				}, maxWait, interval).Should(Equal(len(rdSpecListOtherOwner)))
 
@@ -625,6 +630,7 @@ var _ = Describe("VolSync Handler", func() {
 				rdList := &volsyncv1alpha1.ReplicationDestinationList{}
 				Eventually(func() int {
 					Expect(k8sClient.List(ctx, rdList, client.InNamespace(testNamespace.GetName()))).To(Succeed())
+
 					return len(rdList.Items)
 				}, maxWait, interval).Should(Equal(3 + len(rdSpecListOtherOwner)))
 
@@ -696,6 +702,7 @@ var _ = Describe("VolSync Handler", func() {
 			allRSs := &volsyncv1alpha1.ReplicationSourceList{}
 			Eventually(func() int {
 				Expect(k8sClient.List(ctx, allRSs, client.InNamespace(testNamespace.GetName()))).To(Succeed())
+
 				return len(allRSs.Items)
 			}, maxWait, interval).Should(Equal(len(rsSpecList) + len(rsSpecListOtherOwner)))
 		})
@@ -708,6 +715,7 @@ var _ = Describe("VolSync Handler", func() {
 				rsList := &volsyncv1alpha1.ReplicationSourceList{}
 				Eventually(func() int {
 					Expect(k8sClient.List(ctx, rsList, client.InNamespace(testNamespace.GetName()))).To(Succeed())
+
 					return len(rsList.Items)
 				}, maxWait, interval).Should(Equal(len(rsSpecListOtherOwner)))
 
@@ -730,6 +738,7 @@ var _ = Describe("VolSync Handler", func() {
 				rsList := &volsyncv1alpha1.ReplicationSourceList{}
 				Eventually(func() int {
 					Expect(k8sClient.List(ctx, rsList, client.InNamespace(testNamespace.GetName()))).To(Succeed())
+
 					return len(rsList.Items)
 				}, maxWait, interval).Should(Equal(2 + len(rsSpecListOtherOwner)))
 
