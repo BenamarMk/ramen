@@ -124,16 +124,18 @@ func (d *DRPCInstance) RunInitialDeployment() (bool, error) {
 	// Check if we already deployed in the homeCluster or elsewhere
 	deployed, clusterName := d.isDeployed(homeCluster)
 	if deployed && clusterName != homeCluster {
-		// IF deployed on cluster that is not the preferred HomeCluster, and
-		// VolSync is not used, then we are done
-		if !d.isVolSyncReplicationNeeded(homeCluster) {
-			return done, nil
-		}
+		// IF deployed on cluster that is not the preferred HomeCluster, then we are done
+		return done, nil
 	}
 
 	// Ensure that initial deployment is complete
 	if deployed && d.isUserPlRuleUpdated(homeCluster) {
-		if d.isVolSyncReplicationNeeded(homeCluster) {
+		vsRepNeeded, err := d.isVolSyncReplicationRequired(homeCluster)
+		if err != nil {
+			return !done, err
+		}
+
+		if vsRepNeeded {
 			err := d.EnsureVolSyncReplicationSetup(homeCluster)
 			if err != nil {
 				return !done, err
@@ -338,7 +340,7 @@ func (d *DRPCInstance) RunFailover() (bool, error) {
 			return !done, nil
 		}
 
-		err := d.resetRDInfoOnPrimary(d.instance.Spec.FailoverCluster)
+		err := d.resetVolSyncRDOnPrimary(d.instance.Spec.FailoverCluster)
 		if err != nil {
 			return !done, err
 		}
@@ -601,7 +603,7 @@ func (d *DRPCInstance) validateRelocation(preferredCluster string) (string, erro
 // ClusterDataProtected condition indicates whether all PV related cluster data for an App (Managed
 // by this DRPC instance) has been protected (uploaded to the S3 store(s)) or not.
 func (d *DRPCInstance) readyToSwitchOver(homeCluster string, preferredCluster string) bool {
-	d.log.Info("Checking whether VRG is available", "cluster", homeCluster)
+	d.log.Info("Checking if VRG is available", "cluster", homeCluster)
 
 	if isMetroAction(d.drPolicy, homeCluster, preferredCluster) {
 		// check fencing status in the preferredCluster
@@ -621,7 +623,7 @@ func (d *DRPCInstance) readyToSwitchOver(homeCluster string, preferredCluster st
 func (d *DRPCInstance) isVRGConditionDataReady(homeCluster string) bool {
 	const ready = true
 
-	d.log.Info("Checking whether VRG DataReay is true", "cluster", homeCluster)
+	d.log.Info("Checking if VRG DataReay is true", "cluster", homeCluster)
 
 	vrg := d.vrgs[homeCluster]
 
@@ -645,7 +647,7 @@ func (d *DRPCInstance) isVRGConditionDataReady(homeCluster string) bool {
 func (d *DRPCInstance) isVRGConditionClusterDataReady(homeCluster string) bool {
 	const ready = true
 
-	d.log.Info("Checking whether VRG ClusterDataReay is true", "cluster", homeCluster)
+	d.log.Info("Checking if VRG ClusterDataReay is true", "cluster", homeCluster)
 
 	vrg := d.vrgs[homeCluster]
 
@@ -738,6 +740,11 @@ func (d *DRPCInstance) setupRelocation(preferredCluster string) error {
 		// During relocation, both clusters should be up and both must be secondaries before we proceed.
 		success := d.moveVRGToSecondaryEverywhere()
 		if !success {
+			return fmt.Errorf("failed to move VRG to secondary everywhere")
+		}
+
+		success = d.ensureVRGIsSecondaryEverywhere("")
+		if !success {
 			return fmt.Errorf("waiting for VRGs to move to secondaries everywhere")
 		}
 	}
@@ -789,12 +796,10 @@ func (d *DRPCInstance) executeRelocation(targetCluster, targetClusterNamespace s
 func (d *DRPCInstance) createVRGManifestWorkAsPrimary(targetCluster string) (bool, error) {
 	d.log.Info("create or update VRG if it does not exists or is not primary", "cluster", targetCluster)
 
-	const created = true
-
 	vrg, err := d.getVRGFromManifestWork(targetCluster)
 	if err != nil {
 		if !errors.IsNotFound(err) {
-			return !created, err
+			return false, err
 		}
 	}
 
@@ -802,16 +807,25 @@ func (d *DRPCInstance) createVRGManifestWorkAsPrimary(targetCluster string) (boo
 		if vrg.Spec.ReplicationState == rmn.Primary {
 			d.log.Info("VRG MW already Primary on this cluster", "name", vrg.Name, "cluster", targetCluster)
 
-			return !created, nil
+			return false, nil
 		}
+
+		err := d.updateVRGState(targetCluster, rmn.Primary)
+		if err != nil {
+			d.log.Info(fmt.Sprintf("Failed to update VRG to secondary on cluster %s. Err (%v)", targetCluster, err))
+
+			return false, err
+		}
+
+		return true, nil
 	}
 
 	err = d.createVRGManifestWork(targetCluster)
 	if err != nil {
-		return !created, err
+		return false, err
 	}
 
-	return created, nil
+	return true, nil
 }
 
 func (d *DRPCInstance) getVRGFromManifestWork(clusterName string) (*rmn.VolumeReplicationGroup, error) {
@@ -849,7 +863,7 @@ func (d *DRPCInstance) moveVRGToSecondaryEverywhere() bool {
 	for _, drCluster := range d.drPolicy.Spec.DRClusterSet {
 		clusterName := drCluster.Name
 
-		err := d.updateVRGStateToSecondary(clusterName)
+		err := d.updateVRGState(clusterName, rmn.Secondary)
 		if err != nil {
 			d.log.Error(err, "Failed to update VRG to secondary", "cluster", clusterName)
 
@@ -863,7 +877,32 @@ func (d *DRPCInstance) moveVRGToSecondaryEverywhere() bool {
 		return false
 	}
 
-	return d.ensureVRGIsSecondaryEverywhere("")
+	return true
+}
+
+func (d *DRPCInstance) moveVRGToSecondaryOnPeers(clusterToSkip string) error {
+	var needRetry bool
+
+	for _, drCluster := range d.drPolicy.Spec.DRClusterSet {
+		clusterName := drCluster.Name
+		if clusterToSkip == clusterName {
+			continue
+		}
+
+		err := d.updateVRGState(clusterName, rmn.Secondary)
+		if err != nil {
+			d.log.Info(fmt.Sprintf("Failed to update VRG to secondary on cluster %s. Err (%v)", clusterName, err))
+			needRetry = true
+
+			continue
+		}
+	}
+
+	if needRetry {
+		return fmt.Errorf("need to retry setting VRG to secondy on peers")
+	}
+
+	return nil
 }
 
 // outputs a string for use in creating a ManagedClusterView name
@@ -1133,6 +1172,24 @@ func (d *DRPCInstance) EnsureCleanup(clusterToSkip string) error {
 		return nil
 	}
 
+	err := d.moveVRGToSecondaryOnPeers(clusterToSkip)
+	if err != nil {
+		return fmt.Errorf("failed to ensure VRG is secondary on peers (%w)", err)
+	}
+
+	// IFF we have VolSync PVCs, then no need to clean up
+	homeCluster := clusterToSkip
+	repReq, err := d.isVolSyncReplicationRequired(homeCluster)
+	if err != nil {
+		return fmt.Errorf("failed to ensure VRG is secondary on peers (%w)", err)
+	}
+
+	if repReq {
+		d.log.Info("No need to clean up secondaries. VolSync replication is required")
+
+		return nil
+	}
+
 	clean, err := d.cleanupSecondaries(clusterToSkip)
 	if err != nil {
 		d.setDRPCCondition(&d.instance.Status.Conditions, rmn.ConditionPeerReady, d.instance.Generation,
@@ -1190,19 +1247,6 @@ func (d *DRPCInstance) ensureVRGManifestWorkOnClusterDeleted(clusterName string)
 		}
 
 		return !done, fmt.Errorf("failed to retrieve ManifestWork (%w)", err)
-	}
-
-	// We have to make sure that the VRG for the MW was set to secondary,
-	updated, err := d.hasVRGStateBeenUpdatedToSecondary(clusterName)
-	if err != nil {
-		return !done, fmt.Errorf("failed to check whether VRG replication state has been updated to secondary (%w)", err)
-	}
-
-	// If it is not set to secondary, then update it
-	if !updated {
-		err = d.updateVRGStateToSecondary(clusterName)
-		// We need to wait for the MW to go to applied state
-		return !done, err
 	}
 
 	// if !IsManifestInAppliedState(mw) {
@@ -1372,28 +1416,7 @@ func (d *DRPCInstance) ensureVRGDeleted(clusterName string) bool {
 	return false
 }
 
-func (d *DRPCInstance) hasVRGStateBeenUpdatedToSecondary(clusterName string) (bool, error) {
-	vrgMWName := d.mwu.BuildManifestWorkName(rmnutil.MWTypeVRG)
-	d.log.Info("Check if VRG has been updated to secondary", "name", vrgMWName, "cluster", clusterName)
-
-	vrg, err := d.getVRGFromManifestWork(clusterName)
-	if err != nil {
-		d.log.Error(err, "failed to check whether VRG state is secondary")
-
-		return false, fmt.Errorf("failed to check whether VRG state for %s is secondary, in namespace %s (%w)",
-			vrgMWName, clusterName, err)
-	}
-
-	if vrg.Spec.ReplicationState == rmn.Secondary {
-		d.log.Info("VRG MW already secondary on this cluster", "name", vrg.Name, "cluster", clusterName)
-
-		return true, nil
-	}
-
-	return false, err
-}
-
-func (d *DRPCInstance) updateVRGStateToSecondary(clusterName string) error {
+func (d *DRPCInstance) updateVRGState(clusterName string, state rmn.ReplicationState) error {
 	vrgMWName := d.mwu.BuildManifestWorkName(rmnutil.MWTypeVRG)
 	d.log.Info(fmt.Sprintf("Updating VRG ownedby MW %s to secondary for cluster %s", vrgMWName, clusterName))
 
@@ -1416,13 +1439,13 @@ func (d *DRPCInstance) updateVRGStateToSecondary(clusterName string) error {
 		return err
 	}
 
-	if vrg.Spec.ReplicationState == rmn.Secondary {
-		d.log.Info(fmt.Sprintf("VRG %s already secondary on this cluster %s", vrg.Name, mw.Namespace))
+	if vrg.Spec.ReplicationState == state {
+		d.log.Info(fmt.Sprintf("VRG %s already %s on this cluster %s", vrg.Name, state, mw.Namespace))
 
 		return nil
 	}
 
-	vrg.Spec.ReplicationState = rmn.Secondary
+	vrg.Spec.ReplicationState = state
 
 	vrgClientManifest, err := d.mwu.GenerateManifest(vrg)
 	if err != nil {
