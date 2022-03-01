@@ -27,6 +27,7 @@ import (
 	gppv1 "github.com/stolostron/governance-policy-propagator/api/v1"
 	viewv1beta1 "github.com/stolostron/multicloud-operators-foundation/pkg/apis/view/v1beta1"
 	plrv1 "github.com/stolostron/multicloud-operators-placementrule/pkg/apis/apps/v1"
+	subv1 "github.com/stolostron/multicloud-operators-subscription/pkg/apis/apps/v1"
 	uberzap "go.uber.org/zap"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -89,6 +90,7 @@ func newManager() (ctrl.Manager, error) {
 
 	if controllerType == ramendrv1alpha1.DRHub {
 		utilruntime.Must(plrv1.AddToScheme(scheme))
+		utilruntime.Must(subv1.SchemeBuilder.AddToScheme(scheme))
 		utilruntime.Must(ocmworkv1.AddToScheme(scheme))
 		utilruntime.Must(viewv1beta1.AddToScheme(scheme))
 		utilruntime.Must(cpcv1.AddToScheme(scheme))

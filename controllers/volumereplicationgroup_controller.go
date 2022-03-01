@@ -20,11 +20,13 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"strings"
 
 	"github.com/go-logr/logr"
 
 	volrep "github.com/csi-addons/volume-replication-operator/api/v1alpha1"
 	volrepController "github.com/csi-addons/volume-replication-operator/controllers"
+	subv1 "github.com/stolostron/multicloud-operators-subscription/pkg/apis/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -339,6 +341,9 @@ const (
 	PVRestoreAnnotation           = "volumereplicationgroups.ramendr.openshift.io/ramen-restore"
 	PVCRestoreAnnotation          = PVRestoreAnnotation
 	AnnotationSet                 = "True"
+	HostingSubscriptionKey        = "apps.open-cluster-management.io/hosting-subscription"
+	HostingDeployableKey          = "apps.open-cluster-management.io/hosting-deployable"
+	SubReconcileOptionKey         = "apps.open-cluster-management.io/reconcile-option"
 )
 
 func (v *VRGInstance) processVRG() (ctrl.Result, error) {
@@ -508,7 +513,9 @@ func (v *VRGInstance) fetchAndRestorePV() (bool, error) {
 		}
 
 		if len(pvList) != len(pvcList) {
-			v.log.Info(fmt.Sprintf("Warning: Found %d PVs and %d PVCs", len(pvList), len(pvcList)))
+			v.log.Info(fmt.Sprintf("Warning: Found mismatch in PV/PVC count (%d/%d)", len(pvList), len(pvcList)))
+
+			continue
 		}
 
 		v.log.Info(fmt.Sprintf("Restoring %d PVs", len(pvList)))
@@ -668,14 +675,6 @@ func (v *VRGInstance) restorePVCClusterData(pvcList []corev1.PersistentVolumeCla
 		v.cleanupPVCForRestore(pvc)
 		v.addPVCRestoreAnnotation(pvc)
 
-		// VRG now owns the PVC instead of the appsub.
-		// TODO: remove this block once ACM fixes the issue detailed here:
-		// https://github.com/stolostron/backlog/issues/20167
-		if err := ctrl.SetControllerReference(v.instance, pvc, v.reconciler.Scheme); err != nil {
-			return fmt.Errorf("failed to set owner reference to PVC resource (%s/%s), %w",
-				pvc.Name, pvc.Namespace, err)
-		}
-
 		if err := v.reconciler.Create(v.ctx, pvc); err != nil {
 			if errors.IsAlreadyExists(err) {
 				err := v.validatePVCExistence(pvc)
@@ -771,7 +770,14 @@ func (v *VRGInstance) addPVRestoreAnnotation(pv *corev1.PersistentVolume) {
 // cleanupPVCForRestore cleans up required PVC fields, to ensure restore succeeds to a new cluster, and
 // rebinding the PVC to an existing PV with the same claimRef
 func (v *VRGInstance) cleanupPVCForRestore(pvc *corev1.PersistentVolumeClaim) {
+	hostingSubscription := pvc.ObjectMeta.Annotations[HostingSubscriptionKey]
+	hostingDeployable := pvc.ObjectMeta.Annotations[HostingDeployableKey]
+	reconcileOption := pvc.ObjectMeta.Annotations[SubReconcileOptionKey]
 	pvc.ObjectMeta.Annotations = map[string]string{}
+	pvc.ObjectMeta.Annotations[HostingSubscriptionKey] = hostingSubscription
+	pvc.ObjectMeta.Annotations[HostingDeployableKey] = hostingDeployable
+	pvc.ObjectMeta.Annotations[SubReconcileOptionKey] = reconcileOption
+
 	pvc.ObjectMeta.Finalizers = []string{}
 	pvc.ObjectMeta.ResourceVersion = ""
 	pvc.ObjectMeta.OwnerReferences = nil
@@ -1315,6 +1321,46 @@ func (v *VRGInstance) preparePVCForVRProtection(pvc *corev1.PersistentVolumeClai
 	// if PVC protection is complete, return
 	if pvc.Annotations[pvcVRAnnotationProtectedKey] == pvcVRAnnotationProtectedValue {
 		return !requeue, !skip
+	}
+
+	if pvc.OwnerReferences == nil {
+		sub := &subv1.Subscription{}
+		namespacedNameStr, found := pvc.Annotations[HostingSubscriptionKey]
+		if !found {
+			return requeue, skip
+		}
+
+		namespacedNameArray := strings.Split(namespacedNameStr, "/")
+		if len(namespacedNameArray) != 2 {
+			return requeue, skip
+		}
+
+		subNS := namespacedNameArray[0]
+		subN := namespacedNameArray[1]
+		err := v.reconciler.Get(context.TODO(),
+			types.NamespacedName{Name: subN, Namespace: subNS}, sub)
+		if err != nil {
+			log.Info(fmt.Sprintf(`Warning: 
+				failed to get subscription using hosting-subscription namespacedName %s, 
+				Trying appending to the hosting-subscription name "-local"`, namespacedNameStr))
+
+			err := v.reconciler.Get(context.TODO(),
+				types.NamespacedName{Name: subN, Namespace: subNS + "-local"}, sub)
+			if err != nil {
+				log.Info(fmt.Sprintf("Warning: failed to get subscription using name %s-local", namespacedNameStr))
+
+				return requeue, skip
+			}
+		}
+
+		// Let VRG receive notification for any changes to VolumeReplication CR
+		// created by VRG.
+		if err := ctrl.SetControllerReference(sub, pvc, v.reconciler.Scheme); err != nil {
+			log.Info(fmt.Sprintf("failed to set owner reference to Subscription resource (%s), %v",
+				namespacedNameStr, err))
+
+			return requeue, skip
+		}
 	}
 
 	// Dont requeue. There will be a reconcile request when predicate sees that pvc is ready.

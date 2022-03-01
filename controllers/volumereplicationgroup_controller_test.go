@@ -12,6 +12,7 @@ import (
 	. "github.com/onsi/gomega"
 	ramendrv1alpha1 "github.com/ramendr/ramen/api/v1alpha1"
 	vrgController "github.com/ramendr/ramen/controllers"
+	subv1 "github.com/stolostron/multicloud-operators-subscription/pkg/apis/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -25,6 +26,11 @@ import (
 const (
 	vrgtimeout  = time.Second * 222
 	vrginterval = time.Millisecond * 10
+)
+
+var (
+	SubName          = "my-sub"
+	SubNamespaceName = "my-sub-namespace"
 )
 
 type Empty struct{}
@@ -275,7 +281,7 @@ var _ = Describe("Test VolumeReplicationGroup", func() {
 			v.waitForVRCountToMatch(0)
 			// v.verifyVRGStatusExpectation(false)
 		})
-		It("waits for VRG to status to match", func() {
+		It("waits for VRG status to match", func() {
 			v := vrgScheduleTests[0]
 			v.verifyVRGStatusExpectation(false)
 		})
@@ -417,6 +423,7 @@ func newVRGTestCaseBindInfo(pvcCount int, testTemplate *template, checkBind, vrg
 	v.createNamespace()
 	v.createSC(testTemplate)
 	v.createVRC(testTemplate)
+	createSub(v.namespace, v.vrgName)
 
 	// Setup PVC labels
 	if pvcCount > 0 {
@@ -556,6 +563,8 @@ func (v *vrgTest) createPVC(pvcName, namespace, volumeName string, labels map[st
 			// ResourceVersion: "1",
 			SelfLink: "/api/v1/namespaces/testns/persistentvolumeclaims/" + pvcName,
 			UID:      types.UID(volumeName),
+			Annotations: map[string]string{
+				"apps.open-cluster-management.io/hosting-subscription": v.namespace + "/" + v.vrgName},
 		},
 		Spec: corev1.PersistentVolumeClaimSpec{
 			AccessModes:      accessModes,
@@ -570,6 +579,11 @@ func (v *vrgTest) createPVC(pvcName, namespace, volumeName string, labels map[st
 		schema.GroupResource{Resource: "persistentvolumeclaims"}, pvcName)
 	Expect(err).To(SatisfyAny(BeNil(), MatchError(expectedErr)),
 		"failed to create PVC %s", pvcName)
+
+	Eventually(func() bool {
+		pvc, err = v.getPVC(pvcName)
+		return err == nil
+	}, timeout, interval).Should(BeTrue(), "failed to get PVC %s", pvcName)
 
 	pvc.Status.Phase = bindInfo
 	pvc.Status.AccessModes = accessModes
@@ -593,7 +607,8 @@ func (v *vrgTest) bindPVAndPVC() {
 		i := i // capture i for use in closure
 
 		// Bind PVC
-		pvc := v.getPVC(v.pvcNames[i])
+		pvc, err := v.getPVC(v.pvcNames[i])
+		Expect(err).To(BeNil(), "failed to get PVC %s", v.pvcNames[i])
 		pvc.Status.Phase = corev1.ClaimBound
 		err = k8sClient.Status().Update(context.TODO(), pvc)
 		Expect(err).To(BeNil(),
@@ -692,6 +707,30 @@ func (v *vrgTest) createSC(testTemplate *template) {
 		"failed to create/get StorageClass %s/%s", v.storageClass, v.vrgName)
 }
 
+func createSub(namespace, name string) {
+	subNamespace := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespace}}
+	err := k8sClient.Create(context.TODO(), subNamespace)
+	if !errors.IsAlreadyExists(err) {
+		fmt.Println("--------------- ERROR: ", err)
+		Expect(err).NotTo(HaveOccurred())
+	}
+
+	subscription := &subv1.Subscription{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+		},
+		Spec: subv1.SubscriptionSpec{
+			Channel: "test/test-github-channel",
+		},
+	}
+
+	err = k8sClient.Create(context.TODO(), subscription)
+	if !errors.IsAlreadyExists(err) {
+		Expect(err).NotTo(HaveOccurred())
+	}
+}
+
 func (v *vrgTest) verifyPVCBindingToPV(checkBind bool) {
 	By("Waiting for PVC to get bound to PVs for " + v.vrgName)
 
@@ -699,7 +738,10 @@ func (v *vrgTest) verifyPVCBindingToPV(checkBind bool) {
 		_ = v.getPV(v.pvNames[i])
 		i := i // capture i for use in closure
 		Eventually(func() bool {
-			pvc := v.getPVC(v.pvcNames[i])
+			pvc, err := v.getPVC(v.pvcNames[i])
+			if err != nil {
+				return false
+			}
 
 			if checkBind == true {
 				return pvc.Status.Phase == corev1.ClaimBound
@@ -722,7 +764,7 @@ func (v *vrgTest) getPV(pvName string) *corev1.PersistentVolume {
 	return pv
 }
 
-func (v *vrgTest) getPVC(pvcName string) *corev1.PersistentVolumeClaim {
+func (v *vrgTest) getPVC(pvcName string) (*corev1.PersistentVolumeClaim, error) {
 	key := types.NamespacedName{
 		Namespace: v.namespace,
 		Name:      pvcName,
@@ -730,10 +772,8 @@ func (v *vrgTest) getPVC(pvcName string) *corev1.PersistentVolumeClaim {
 
 	pvc := &corev1.PersistentVolumeClaim{}
 	err := k8sClient.Get(context.TODO(), key, pvc)
-	Expect(err).NotTo(HaveOccurred(),
-		"failed to get PVC %s", pvcName)
 
-	return pvc
+	return pvc, err
 }
 
 func (v *vrgTest) getVRG(vrgName string) *ramendrv1alpha1.VolumeReplicationGroup {
@@ -769,7 +809,7 @@ func (v *vrgTest) verifyVRGStatusExpectation(expectedStatus bool) {
 			}
 		}
 
-		return dataReadyCondition.Status != metav1.ConditionTrue
+		return dataReadyCondition != nil && dataReadyCondition.Status != metav1.ConditionTrue
 	}, vrgtimeout, vrginterval).Should(BeTrue(),
 		"while waiting for VRG TRUE condition %s/%s", v.vrgName, v.namespace)
 }
@@ -798,7 +838,10 @@ func (v *vrgTest) cleanup() {
 
 func (v *vrgTest) cleanupPVCs() {
 	for _, pvcName := range v.pvcNames {
-		if pvc := v.getPVC(pvcName); pvc != nil {
+		pvc, err := v.getPVC(pvcName)
+		Expect(err).NotTo(HaveOccurred(),
+			"failed to get PVC %s", pvcName)
+		if err != nil {
 			err := k8sClient.Delete(context.TODO(), pvc)
 			Expect(err).To(BeNil(),
 				"failed to delete PVC %s", pvcName)
@@ -1054,24 +1097,24 @@ func (s FakePVDownloader) DownloadPVsAndPVCs(ctx context.Context, r client.Reade
 	keyPrefix string, log logr.Logger) ([]corev1.PersistentVolume, []corev1.PersistentVolumeClaim, error) {
 	capacity := corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("1Gi")}
 	pvList := []corev1.PersistentVolume{}
-	// pvcList := []corev1.PersistentVolumeClaim{}
+	pvcList := []corev1.PersistentVolumeClaim{}
 
 	var i int
-
+	createSub(SubNamespaceName, SubName)
 	for _, pvName := range PVsToRestore {
+		namespace := SubNamespaceName
 		objectNameSuffix := 'a' + testCaseNumber - 1
-		namespace := fmt.Sprintf("envtest-ns-%c", objectNameSuffix)
 		pvcName := fmt.Sprintf("pvc-%c-%02d", objectNameSuffix, i)
 		i++
 
 		pv := createPVObject(pvName, pvcName, namespace, capacity)
 
 		pvList = append(pvList, *pv)
-		// pvc := createPVCObject(pvName, pvcName, namespace, capacity)
-		// pvcList = append(pvcList, *pvc)
+		pvc := createPVCObject(pvName, pvcName, namespace, capacity)
+		pvcList = append(pvcList, *pvc)
 	}
 
-	return pvList, nil, nil
+	return pvList, pvcList, nil
 }
 
 func createPVObject(pvName, pvcName, namespace string,
@@ -1119,26 +1162,28 @@ func createPVObject(pvName, pvcName, namespace string,
 	}
 }
 
-// func createPVCObject(pvName, pvcName, namespace string,
-// 	capacity corev1.ResourceList) *corev1.PersistentVolumeClaim {
-// 	storageclass := "manual"
-// 	accessModes := []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce}
+func createPVCObject(pvName, pvcName, namespace string,
+	capacity corev1.ResourceList) *corev1.PersistentVolumeClaim {
+	storageclass := "manual"
+	accessModes := []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce}
 
-// 	return &corev1.PersistentVolumeClaim{
-// 		TypeMeta: metav1.TypeMeta{},
-// 		ObjectMeta: metav1.ObjectMeta{
-// 			Name:      pvcName,
-// 			Labels:    map[string]string{},
-// 			Namespace: namespace,
-// 		},
-// 		Spec: corev1.PersistentVolumeClaimSpec{
-// 			AccessModes:      accessModes,
-// 			Resources:        corev1.ResourceRequirements{Requests: capacity},
-// 			VolumeName:       pvName,
-// 			StorageClassName: &storageclass,
-// 		},
-// 	}
-// }
+	return &corev1.PersistentVolumeClaim{
+		TypeMeta: metav1.TypeMeta{},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      pvcName,
+			Labels:    map[string]string{},
+			Namespace: namespace,
+			Annotations: map[string]string{
+				"apps.open-cluster-management.io/hosting-subscription": SubNamespaceName + "/" + SubName},
+		},
+		Spec: corev1.PersistentVolumeClaimSpec{
+			AccessModes:      accessModes,
+			Resources:        corev1.ResourceRequirements{Requests: capacity},
+			VolumeName:       pvName,
+			StorageClassName: &storageclass,
+		},
+	}
+}
 
 type FakePVUploader struct{}
 
