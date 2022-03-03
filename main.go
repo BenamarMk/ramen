@@ -45,8 +45,6 @@ import (
 var (
 	scheme   = runtime.NewScheme()
 	setupLog = ctrl.Log.WithName("setup")
-
-	controllerType ramendrv1alpha1.ControllerType
 )
 
 func init() {
@@ -82,13 +80,13 @@ func newManager() (ctrl.Manager, error) {
 		options, ramenConfig = controllers.LoadControllerConfig(configFile, scheme, setupLog)
 	}
 
-	controllerType = ramenConfig.RamenControllerType
-	if !(controllerType == ramendrv1alpha1.DRCluster || controllerType == ramendrv1alpha1.DRHub) {
+	controllers.ControllerType = ramenConfig.RamenControllerType
+	if !(controllers.ControllerType == ramendrv1alpha1.DRCluster || controllers.ControllerType == ramendrv1alpha1.DRHub) {
 		return nil, fmt.Errorf("invalid controller type specified (%s), should be one of [%s|%s]",
-			controllerType, ramendrv1alpha1.DRHub, ramendrv1alpha1.DRCluster)
+			controllers.ControllerType, ramendrv1alpha1.DRHub, ramendrv1alpha1.DRCluster)
 	}
 
-	if controllerType == ramendrv1alpha1.DRHub {
+	if controllers.ControllerType == ramendrv1alpha1.DRHub {
 		utilruntime.Must(plrv1.AddToScheme(scheme))
 		utilruntime.Must(subv1.SchemeBuilder.AddToScheme(scheme))
 		utilruntime.Must(ocmworkv1.AddToScheme(scheme))
@@ -97,6 +95,7 @@ func newManager() (ctrl.Manager, error) {
 		utilruntime.Must(gppv1.AddToScheme(scheme))
 	} else {
 		utilruntime.Must(volrep.AddToScheme(scheme))
+		utilruntime.Must(subv1.SchemeBuilder.AddToScheme(scheme))
 	}
 
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), options)
@@ -108,7 +107,7 @@ func newManager() (ctrl.Manager, error) {
 }
 
 func setupReconcilers(mgr ctrl.Manager) {
-	if controllerType == ramendrv1alpha1.DRHub {
+	if controllers.ControllerType == ramendrv1alpha1.DRHub {
 		if err := (&controllers.DRPolicyReconciler{
 			Client:            mgr.GetClient(),
 			APIReader:         mgr.GetAPIReader(),

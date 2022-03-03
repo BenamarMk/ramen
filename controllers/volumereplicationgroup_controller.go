@@ -1337,21 +1337,45 @@ func (v *VRGInstance) preparePVCForVRProtection(pvc *corev1.PersistentVolumeClai
 
 		subNS := namespacedNameArray[0]
 		subN := namespacedNameArray[1]
+		var checkLocal bool
+
 		err := v.reconciler.Get(context.TODO(),
 			types.NamespacedName{Name: subN, Namespace: subNS}, sub)
 		if err != nil {
-			log.Info(fmt.Sprintf(`Warning: 
-				failed to get subscription using hosting-subscription namespacedName %s, 
-				Trying appending to the hosting-subscription name "-local"`, namespacedNameStr))
+			if !errors.IsNotFound(err) {
+				log.Info(fmt.Sprintf("Failed to get subscription using hosting-subscription %s. Error (%v)",
+					namespacedNameStr, err))
+
+				return requeue, skip
+			}
+
+			checkLocal = true
+		}
+
+		// We have to use the subscription that's targeted for this managed cluster
+		if !checkLocal || sub.Status.Phase != "Subscribed" {
+			checkLocal = true
+		}
+
+		if checkLocal {
+			// Subscription does not exist.  Try [subname]-local
+			if strings.Contains(subN, "-local") {
+				subN = strings.ReplaceAll(subN, "-local", "")
+			} else {
+				subN = subN + "-local"
+			}
 
 			err := v.reconciler.Get(context.TODO(),
-				types.NamespacedName{Name: subN, Namespace: subNS + "-local"}, sub)
+				types.NamespacedName{Name: subN, Namespace: subNS}, sub)
 			if err != nil {
-				log.Info(fmt.Sprintf("Warning: failed to get subscription using name %s-local", namespacedNameStr))
+				log.Info(fmt.Sprintf("Warning: failed to get subscription using name %s", subN))
 
 				return requeue, skip
 			}
 		}
+
+		// save the hosting subscription name
+		pvc.ObjectMeta.Annotations[HostingSubscriptionKey] = subN
 
 		// Let VRG receive notification for any changes to VolumeReplication CR
 		// created by VRG.
