@@ -130,16 +130,9 @@ func (d *DRPCInstance) RunInitialDeployment() (bool, error) {
 
 	// Ensure that initial deployment is complete
 	if deployed && d.isUserPlRuleUpdated(homeCluster) {
-		vsRepNeeded, err := d.isVolSyncReplicationRequired(homeCluster)
+		err := d.EnsureVolSyncReplicationSetup(homeCluster)
 		if err != nil {
 			return !done, err
-		}
-
-		if vsRepNeeded {
-			err := d.EnsureVolSyncReplicationSetup(homeCluster)
-			if err != nil {
-				return !done, err
-			}
 		}
 
 		// If for whatever reason, the DRPC status is missing (i.e. DRPC could have been deleted mistakingly and
@@ -333,7 +326,7 @@ func (d *DRPCInstance) RunFailover() (bool, error) {
 		d.setDRPCCondition(&d.instance.Status.Conditions, rmn.ConditionAvailable, d.instance.Generation,
 			metav1.ConditionTrue, string(d.instance.Status.Phase), "Completed")
 
-		ready := d.isVRGConditionDataReady(d.instance.Spec.FailoverCluster)
+		ready := d.checkReadinessAfterFailover(d.instance.Spec.FailoverCluster)
 		if !ready {
 			d.log.Info("VRGCondition not ready")
 
@@ -617,13 +610,18 @@ func (d *DRPCInstance) readyToSwitchOver(homeCluster string, preferredCluster st
 		}
 	}
 	// Allow switch over when PV data is ready and the cluster data is protected
-	return d.isVRGConditionDataReady(homeCluster) && d.isVRGConditionClusterDataReady(homeCluster)
+	return d.isVolRepVRGConditionReady(homeCluster)
 }
 
-func (d *DRPCInstance) isVRGConditionDataReady(homeCluster string) bool {
+func (d *DRPCInstance) isVolRepVRGConditionReady(homeCluster string) bool {
+	return d.isVRGConditionReady(homeCluster, VRGConditionTypeDataReady) &&
+		d.isVRGConditionReady(homeCluster, VRGConditionTypeClusterDataProtected)
+}
+
+func (d *DRPCInstance) checkReadinessAfterFailover(homeCluster string) bool {
 	const ready = true
 
-	d.log.Info("Checking if VRG DataReay is true", "cluster", homeCluster)
+	d.log.Info(fmt.Sprintf("Checking if VRG is ready on cluster %s", homeCluster))
 
 	vrg := d.vrgs[homeCluster]
 
@@ -632,22 +630,38 @@ func (d *DRPCInstance) isVRGConditionDataReady(homeCluster string) bool {
 
 		return !ready
 	}
+
+	// This is called during failover and therefore, we will assume that data is ready IFF
+	// the condition is not found
+	dataReady := true
 
 	dataReadyCondition := findCondition(vrg.Status.Conditions, VRGConditionTypeDataReady)
-	if dataReadyCondition == nil {
-		d.log.Info("VRG DataReady condition not available", "cluster", homeCluster)
-
-		return !ready
+	if dataReadyCondition != nil {
+		d.log.Info(fmt.Sprintf("Found dataReadyCondition %+v", dataReadyCondition))
+		if dataReadyCondition.Reason != VRGConditionReasonInitializing {
+			dataReady = ((dataReadyCondition.Status == metav1.ConditionTrue) &&
+				(dataReadyCondition.ObservedGeneration == vrg.Generation))
+		}
 	}
 
-	return dataReadyCondition.Status == metav1.ConditionTrue &&
-		dataReadyCondition.ObservedGeneration == vrg.Generation
+	repSetupComplete := true
+
+	repSetupCondition := findCondition(vrg.Status.Conditions, VRGConditionTypeVolSyncRepSourceSetup)
+	if repSetupCondition != nil {
+		d.log.Info(fmt.Sprintf("Found repSetupCondition %+v", repSetupCondition))
+		if repSetupCondition.Reason != VRGConditionReasonInitializing {
+			repSetupComplete = ((repSetupCondition.Status == metav1.ConditionTrue) &&
+				(repSetupCondition.ObservedGeneration == vrg.Generation))
+		}
+	}
+
+	return dataReady && repSetupComplete
 }
 
-func (d *DRPCInstance) isVRGConditionClusterDataReady(homeCluster string) bool {
+func (d *DRPCInstance) isVRGConditionReady(homeCluster string, conditionType string) bool {
 	const ready = true
 
-	d.log.Info("Checking if VRG ClusterDataReay is true", "cluster", homeCluster)
+	d.log.Info(fmt.Sprintf("Checking if VRG is %s on cluster %s", conditionType, homeCluster))
 
 	vrg := d.vrgs[homeCluster]
 
@@ -657,15 +671,15 @@ func (d *DRPCInstance) isVRGConditionClusterDataReady(homeCluster string) bool {
 		return !ready
 	}
 
-	clusterDataProtectedCondition := findCondition(vrg.Status.Conditions, VRGConditionTypeClusterDataProtected)
-	if clusterDataProtectedCondition == nil {
-		d.log.Info("VRG ClusterData condition not available", "cluster", homeCluster)
+	condition := findCondition(vrg.Status.Conditions, conditionType)
+	if condition == nil {
+		d.log.Info(fmt.Sprintf("VRG %s condition not available on cluster %s", conditionType, homeCluster))
 
 		return !ready
 	}
 
-	return clusterDataProtectedCondition.Status == metav1.ConditionTrue &&
-		clusterDataProtectedCondition.ObservedGeneration == vrg.Generation
+	return condition.Status == metav1.ConditionTrue &&
+		condition.ObservedGeneration == vrg.Generation
 }
 
 func (d *DRPCInstance) relocate(preferredCluster, preferredClusterNamespace string, drState rmn.DRState) (bool, error) {
@@ -1185,7 +1199,7 @@ func (d *DRPCInstance) EnsureCleanup(clusterToSkip string) error {
 	}
 
 	if repReq {
-		d.log.Info("No need to clean up secondaries. VolSync replication is required")
+		d.log.Info("No need to clean up secondaries. VolSync needs both VRGs")
 
 		return nil
 	}

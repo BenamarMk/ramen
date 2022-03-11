@@ -25,7 +25,7 @@ import (
 )
 
 func (v *VRGInstance) restorePVsForVolSync() error {
-	v.log.Info("Restoring VolSync PVs")
+	v.log.Info("VolSync: Restoring VolSync PVs")
 	// TODO: refactor this per this comment: https://github.com/RamenDR/ramen/pull/197#discussion_r687246692
 	pvsRestored := findCondition(v.instance.Status.Conditions, VRGConditionTypeVolSyncPVsRestored)
 	if pvsRestored != nil && pvsRestored.Status == metav1.ConditionTrue &&
@@ -43,7 +43,7 @@ func (v *VRGInstance) restorePVsForVolSync() error {
 
 	msg := "Restoring PVC cluster data"
 	setVRGConditionTypeVolSyncPVRestoring(&v.instance.Status.Conditions, v.instance.Generation, msg)
-	v.log.Info("Restoring PVCs to this managed cluster.", "RDSpec", v.instance.Spec.VolSync.RDSpec)
+	v.log.Info("VolSync: Restoring PVCs to this managed cluster.", "RDSpec", v.instance.Spec.VolSync.RDSpec)
 
 	success := true
 
@@ -65,7 +65,7 @@ func (v *VRGInstance) restorePVsForVolSync() error {
 		return fmt.Errorf("failed to restorePVCs using RDSpec (%v)", v.instance.Spec.VolSync.RDSpec)
 	}
 
-	msg = "PVC cluster data restored"
+	msg = "VolSync: PVC cluster data restored"
 	setVRGConditionTypeVolSyncPVRestoreComplete(&v.instance.Status.Conditions, v.instance.Generation, msg)
 	v.log.Info(msg, "RDSpec", v.instance.Spec.VolSync.RDSpec)
 

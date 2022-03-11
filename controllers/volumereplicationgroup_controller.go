@@ -1026,7 +1026,7 @@ func (v *VRGInstance) processAsPrimary() (ctrl.Result, error) {
 	}
 
 	if err := v.restorePVs(); err != nil {
-		v.log.Info("Restoring PVs failed", "errorValue", err)
+		v.log.Info("Restoring PVs failed", "Error", err.Error())
 
 		msg := fmt.Sprintf("Failed to restore PVs (%v)", err.Error())
 		setVRGClusterDataErrorCondition(&v.instance.Status.Conditions, v.instance.Generation, msg)

@@ -104,6 +104,27 @@ func setVRGInitialCondition(conditions *[]metav1.Condition, observedGeneration i
 		Status:             metav1.ConditionUnknown,
 		Message:            message,
 	})
+	setStatusCondition(conditions, metav1.Condition{
+		Type:               VRGConditionTypeVolSyncRepSourceSetup,
+		Reason:             VRGConditionReasonInitializing,
+		ObservedGeneration: observedGeneration,
+		Status:             metav1.ConditionUnknown,
+		Message:            message,
+	})
+	setStatusCondition(conditions, metav1.Condition{
+		Type:               VRGConditionTypeVolSyncRepDestinationSetup,
+		Reason:             VRGConditionReasonInitializing,
+		ObservedGeneration: observedGeneration,
+		Status:             metav1.ConditionUnknown,
+		Message:            message,
+	})
+	setStatusCondition(conditions, metav1.Condition{
+		Type:               VRGConditionTypeVolSyncPVsRestored,
+		Reason:             VRGConditionReasonInitializing,
+		ObservedGeneration: observedGeneration,
+		Status:             metav1.ConditionUnknown,
+		Message:            message,
+	})
 }
 
 // sets conditions when VRG as Secondary is replicating the data with Primary.
