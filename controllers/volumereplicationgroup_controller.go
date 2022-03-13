@@ -2054,6 +2054,12 @@ func (v *VRGInstance) updateVRGConditions() {
 //    VRG.conditions.Available.Reason = Progressing
 //
 func (v *VRGInstance) updateVRGDataReadyCondition() {
+	if (len(v.volRepPVCs) == 0) && (len(v.volSyncPVCs) > 0) {
+		v.vrgReadyStatus()
+
+		return
+	}
+
 	vrgReady := len(v.instance.Status.ProtectedPVCs) != 0
 	vrgProgressing := false
 
@@ -2116,6 +2122,15 @@ func (v *VRGInstance) updateVRGDataReadyCondition() {
 }
 
 func (v *VRGInstance) updateVRGDataProtectedCondition() {
+	if (len(v.volRepPVCs) == 0) && (len(v.volSyncPVCs) > 0) {
+		v.log.Info("Marking VRG data protected after completing replication")
+
+		msg := "PVCs in the VolumeReplicationGroup are data protected "
+		setVRGAsDataProtectedCondition(&v.instance.Status.Conditions, v.instance.Generation, msg)
+
+		return
+	}
+
 	vrgProtected := true
 	vrgReplicating := false
 
@@ -2202,6 +2217,15 @@ func (v *VRGInstance) vrgReadyStatus() {
 // protecting condition, set the VRG level condition to protecting.  If not, set
 // the VRG level condition to true.
 func (v *VRGInstance) updateVRGClusterDataProtectedCondition() {
+	if (len(v.volRepPVCs) == 0) && (len(v.volSyncPVCs) > 0) {
+		v.log.Info("Marking VRG data protected")
+
+		msg := "Cluster data of all PVs are protected"
+		setVRGClusterDataProtectedCondition(&v.instance.Status.Conditions, v.instance.Generation, msg)
+
+		return
+	}
+
 	atleastOneProtecting := false
 	atleastOneError := false
 
