@@ -18,6 +18,7 @@ package controllers
 
 import (
 	"fmt"
+	"reflect"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -41,14 +42,9 @@ func (v *VRGInstance) restorePVsForVolSync() error {
 		return nil
 	}
 
-	msg := "Restoring PVC cluster data"
-	setVRGConditionTypeVolSyncPVRestoring(&v.instance.Status.Conditions, v.instance.Generation, msg)
-	v.log.Info("VolSync: Restoring PVCs to this managed cluster.", "RDSpec", v.instance.Spec.VolSync.RDSpec)
-
 	success := true
-
 	for _, rdSpec := range v.instance.Spec.VolSync.RDSpec {
-		//TODO: Restore volume - if failure, set success=false
+
 		err := v.volSyncHandler.EnsurePVCfromRD(rdSpec)
 		if err != nil {
 			v.log.Error(err, "Unable to ensure PVC", "rdSpec", rdSpec)
@@ -57,17 +53,24 @@ func (v *VRGInstance) restorePVsForVolSync() error {
 			continue // Keep trying to ensure PVCs for other rdSpec
 		}
 
-		//TODO: Should we set status condition per protected PVC?
-		// setVRGConditionTypeVolSyncPVRestoreComplete(&v.instance.Status.ProtectedPVCs, v.instance.Generation, "PVC restored")
+		if protectedPVC := v.findProtectedPVC(rdSpec.ProtectedPVC.Name); protectedPVC != nil {
+			setVRGConditionTypeVolSyncPVRestoreComplete(&protectedPVC.Conditions, v.instance.Generation, "PVC restored")
+
+			continue
+		}
+
+		protectedPVC := rdSpec.ProtectedPVC
+		setVRGConditionTypeVolSyncPVRestoreComplete(&protectedPVC.Conditions, v.instance.Generation, "PVC restored")
+		v.instance.Status.ProtectedPVCs = append(v.instance.Status.ProtectedPVCs, protectedPVC)
 	}
 
 	if !success {
-		return fmt.Errorf("failed to restorePVCs using RDSpec (%v)", v.instance.Spec.VolSync.RDSpec)
+		return fmt.Errorf("failed to restore all PVCs using RDSpec (%v)", v.instance.Spec.VolSync.RDSpec)
 	}
 
-	msg = "VolSync: PVC cluster data restored"
-	setVRGConditionTypeVolSyncPVRestoreComplete(&v.instance.Status.Conditions, v.instance.Generation, msg)
-	v.log.Info(msg, "RDSpec", v.instance.Spec.VolSync.RDSpec)
+	msg := "VolSync: PVCs restored"
+	setVRGConditionTypeVolSyncRepSourceSetupInitializing(&v.instance.Status.Conditions, v.instance.Generation, msg)
+	v.log.Info(msg)
 
 	return nil
 }
@@ -77,20 +80,20 @@ func (v *VRGInstance) reconcileVolSyncAsPrimary() bool {
 
 	// First time: Add all VolSync PVCs to the protected PVC list and set their ready condition to initializing
 	for _, pvc := range v.volSyncPVCs {
+		newProtectedPVC := &ramendrv1alpha1.ProtectedPVC{
+			Name:               pvc.Name,
+			ProtectedByVolSync: true,
+			StorageClassName:   pvc.Spec.StorageClassName,
+			AccessModes:        pvc.Spec.AccessModes,
+			Resources:          pvc.Spec.Resources,
+		}
+
 		protectedPVC := v.findProtectedPVC(pvc.Name)
 		if protectedPVC == nil {
-			protectedPVC = &ramendrv1alpha1.ProtectedPVC{
-				Name:               pvc.Name,
-				ProtectedByVolSync: true,
-				StorageClassName:   pvc.Spec.StorageClassName,
-				AccessModes:        pvc.Spec.AccessModes,
-				Resources:          pvc.Spec.Resources,
-			}
-
-			setVRGConditionTypeVolSyncRepSourceSetupInitializing(&protectedPVC.Conditions, v.instance.Generation,
-				"Initializing VolSync Replication Source")
-
+			protectedPVC = newProtectedPVC
 			v.instance.Status.ProtectedPVCs = append(v.instance.Status.ProtectedPVCs, *protectedPVC)
+		} else if !reflect.DeepEqual(protectedPVC, newProtectedPVC) {
+			newProtectedPVC.DeepCopyInto(protectedPVC)
 		}
 
 		rsSpec := ramendrv1alpha1.VolSyncReplicationSourceSpec{

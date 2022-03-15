@@ -346,6 +346,7 @@ func (v *VSHandler) ensurePVCFromSnapshot(rdSpec ramendrv1alpha1.VolSyncReplicat
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      rdSpec.ProtectedPVC.Name,
 			Namespace: v.owner.GetNamespace(),
+			Labels: map[string]string{"appname": "busybox"}, //FIXME
 		},
 	}
 

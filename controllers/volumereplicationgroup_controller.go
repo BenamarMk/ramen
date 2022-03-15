@@ -2016,6 +2016,21 @@ func getStatusStateFromSpecState(state ramendrv1alpha1.ReplicationState) ramendr
 // The VRGConditionTypeClusterDataReady summary condition is not a PVC level
 // condition and is updated elsewhere.
 func (v *VRGInstance) updateVRGConditions() {
+	if (len(v.volRepPVCs) == 0) && (len(v.volSyncPVCs) > 0) &&
+		(v.instance.Spec.ReplicationState == ramendrv1alpha1.Primary) {
+		volSyncSrcSetup := findCondition(v.instance.Status.Conditions, VRGConditionTypeVolSyncRepSourceSetup)
+		if volSyncSrcSetup != nil && volSyncSrcSetup.Status == metav1.ConditionTrue {
+			setVRGAsPrimaryReadyCondition(&v.instance.Status.Conditions, v.instance.Generation,
+				"All PVCs in the VolumeReplicationGroup are VolSync ready")
+			setVRGAsDataProtectedCondition(&v.instance.Status.Conditions, v.instance.Generation,
+				"All PVCs in the VolumeReplicationGroup are VolSync data protected")
+			setVRGClusterDataProtectedCondition(&v.instance.Status.Conditions, v.instance.Generation,
+				"All Cluster data of all PVs are protected")
+
+			return
+		}
+	}
+
 	v.updateVRGDataReadyCondition()
 	v.updateVRGDataProtectedCondition()
 	v.updateVRGClusterDataProtectedCondition()
