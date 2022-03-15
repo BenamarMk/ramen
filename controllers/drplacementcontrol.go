@@ -329,7 +329,7 @@ func (d *DRPCInstance) RunFailover() (bool, error) {
 		// Make sure VolRep 'Data' and VolSync 'setup' conditions are ready
 		ready := d.checkReadinessAfterFailover(d.instance.Spec.FailoverCluster)
 		if !ready {
-			d.log.Info("VRGCondition not ready")
+			d.log.Info("VRGCondition not ready to finish failover")
 
 			return !done, nil
 		}
@@ -347,8 +347,8 @@ func (d *DRPCInstance) RunFailover() (bool, error) {
 			return !done, err
 		}
 
-		// After clean, The VolSync ReplicationSource (RS) will automatically get create, but for
-		// the ReplicationDestination (RD), we need to explicitely tell the VRG to create it. 
+		// After we ensured peers are clean, The VolSync ReplicationSource (RS) will automatically get
+		// created, but for the ReplicationDestination, we need to explicitly tell the VRG to create it.
 		err = d.EnsureVolSyncReplicationSetup(d.instance.Spec.FailoverCluster)
 		if err != nil {
 			return !done, err
@@ -490,12 +490,33 @@ func (d *DRPCInstance) RunRelocate() (bool, error) {
 		d.setDRPCCondition(&d.instance.Status.Conditions, rmn.ConditionAvailable, d.instance.Generation,
 			metav1.ConditionTrue, string(d.instance.Status.Phase), "Completed")
 
-		err := d.EnsureCleanup(preferredCluster)
+		// Make sure VolRep 'Data' and VolSync 'setup' conditions are ready
+		ready := d.checkReadinessAfterFailover(preferredCluster)
+		if !ready {
+			d.log.Info("VRGCondition not ready to finish relocation")
+
+			return !done, nil
+		}
+
+		// If we have VolSync replication, this is the perfect time to reset the RDSpec
+		// on the primary. This will cause the RD to be cleared on the primary
+		err := d.resetVolSyncRDOnPrimary(preferredCluster)
 		if err != nil {
 			return !done, err
 		}
 
-		return done, nil
+		clusterToSkip := preferredCluster
+		err = d.EnsureCleanup(clusterToSkip)
+		if err != nil {
+			return !done, err
+		}
+
+		// After we ensured peers are clean, The VolSync ReplicationSource (RS) will automatically get
+		// created, but for the ReplicationDestination, we need to explicitly tell the VRG to create it.
+		err = d.EnsureVolSyncReplicationSetup(preferredCluster)
+		if err != nil {
+			return !done, err
+		}
 	}
 
 	// Check if current primary (that is not the preferred cluster), is ready to switch over
