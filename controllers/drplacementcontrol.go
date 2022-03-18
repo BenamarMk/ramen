@@ -417,7 +417,7 @@ func (d *DRPCInstance) switchToFailoverCluster() (bool, error) {
 
 	const restorePVs = true
 
-	err := d.executeRelocation(newHomeCluster, "", restorePVs)
+	err := d.switchToCluster(newHomeCluster, "", restorePVs)
 	if err != nil {
 		d.setDRPCCondition(&d.instance.Status.Conditions, rmn.ConditionAvailable, d.instance.Generation,
 			d.getConditionStatusForTypeAvailable(), string(d.instance.Status.Phase), err.Error())
@@ -517,6 +517,8 @@ func (d *DRPCInstance) RunRelocate() (bool, error) {
 		if err != nil {
 			return !done, err
 		}
+
+		return done, nil
 	}
 
 	// Check if current primary (that is not the preferred cluster), is ready to switch over
@@ -691,7 +693,7 @@ func (d *DRPCInstance) relocate(preferredCluster, preferredClusterNamespace stri
 
 	const restorePVs = true
 
-	err = d.executeRelocation(preferredCluster, preferredClusterNamespace, restorePVs)
+	err = d.switchToCluster(preferredCluster, preferredClusterNamespace, restorePVs)
 	if err != nil {
 		d.setDRPCCondition(&d.instance.Status.Conditions, rmn.ConditionAvailable, d.instance.Generation,
 			d.getConditionStatusForTypeAvailable(), string(d.instance.Status.Phase), err.Error())
@@ -732,7 +734,7 @@ func (d *DRPCInstance) setupRelocation(preferredCluster string) error {
 	// During relocation, the preferredCluster does not contain a VRG or the VRG is already
 	// secondary. We need to skip checking if the VRG for it is secondary to avoid messing up with the
 	// order of execution (it could be refactored better to avoid this complexity). IOW, if we first update
-	// VRG in all clusters to secondaries, and then we call executeRelocation, and If executeRelocation does not
+	// VRG in all clusters to secondaries, and then we call switchToCluster, and If switchToCluster does not
 	// complete in one shot, then coming back to this loop will reset the preferredCluster to secondary again.
 	clusterToSkip := preferredCluster
 	if !d.ensureVRGIsSecondaryEverywhere(clusterToSkip) {
@@ -755,10 +757,10 @@ func (d *DRPCInstance) setupRelocation(preferredCluster string) error {
 	return nil
 }
 
-// executeRelocation is a series of steps to creating, updating, and cleaning up
+// switchToCluster is a series of steps to creating, updating, and cleaning up
 // the necessary objects for the failover or relocation
-func (d *DRPCInstance) executeRelocation(targetCluster, targetClusterNamespace string, restorePVs bool) error {
-	d.log.Info("executeRelocation", "cluster", targetCluster, "restorePVs", restorePVs)
+func (d *DRPCInstance) switchToCluster(targetCluster, targetClusterNamespace string, restorePVs bool) error {
+	d.log.Info("switchToCluster", "cluster", targetCluster, "restorePVs", restorePVs)
 
 	createdOrUpdated, err := d.createVRGManifestWorkAsPrimary(targetCluster)
 	if err != nil {
@@ -1185,6 +1187,8 @@ func (d *DRPCInstance) EnsureCleanup(clusterToSkip string) error {
 
 	if repReq {
 		d.log.Info("No need to clean up secondaries. VolSync needs both VRGs")
+		d.setDRPCCondition(&d.instance.Status.Conditions, rmn.ConditionPeerReady, d.instance.Generation,
+			metav1.ConditionTrue, rmn.ReasonSuccess, "Ready")
 
 		return nil
 	}
