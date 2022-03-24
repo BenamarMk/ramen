@@ -477,7 +477,8 @@ func (d *DRPCInstance) RunRelocate() (bool, error) {
 	preferredCluster := d.instance.Spec.PreferredCluster
 	preferredClusterNamespace := preferredCluster
 
-	homeCluster, err := d.validateRelocation(preferredCluster)
+	// Before relocating to the preferredCluster, we must ensure that the peers are secondaries.
+	homeCluster, err := d.isReadyForRelocation(preferredCluster)
 	if err != nil {
 		d.setDRPCCondition(&d.instance.Status.Conditions, rmn.ConditionAvailable, d.instance.Generation,
 			d.getConditionStatusForTypeAvailable(), string(d.instance.Status.Phase), err.Error())
@@ -485,8 +486,19 @@ func (d *DRPCInstance) RunRelocate() (bool, error) {
 		return !done, err
 	}
 
+	if homeCluster != "" && homeCluster != preferredCluster {
+		// Ensure secondaries have transitioned to the required state. If Not, force them
+		if !d.ensureVRGIsSecondaryEverywhere("") {
+			if !d.moveVRGToSecondaryEverywhere() {
+				return !done, fmt.Errorf("failed to move VRG to secondary everywhere")
+			}
+
+			return !done, nil
+		}
+	}
+
 	// We are done if already relocated; if there were secondaries they are cleaned up above
-	if d.hasAlreadySwitchedOver(preferredCluster) {
+	if homeCluster != "" && d.hasAlreadySwitchedOver(preferredCluster) {
 		d.setDRPCCondition(&d.instance.Status.Conditions, rmn.ConditionAvailable, d.instance.Generation,
 			metav1.ConditionTrue, string(d.instance.Status.Phase), "Completed")
 
@@ -566,25 +578,25 @@ func (d *DRPCInstance) validatePeerReady() bool {
 	return false
 }
 
-func (d *DRPCInstance) arePeersReady() (bool, string, []string) {
-	var peerClusters []string
+func (d *DRPCInstance) selectPrimaryAndSecondaries() (string, []string) {
+	var secondaryVRGs []string
 
-	homeCluster := ""
+	primaryVRG := ""
 
 	for cn, vrg := range d.vrgs {
-		if d.isVRGPrimary(vrg) && homeCluster == "" {
-			homeCluster = cn
+		if d.isVRGPrimary(vrg) && primaryVRG == "" {
+			primaryVRG = cn
 		}
 
 		if d.isVRGSecondary(vrg) {
-			peerClusters = append(peerClusters, cn)
+			secondaryVRGs = append(secondaryVRGs, cn)
 		}
 	}
 
-	return len(peerClusters) == 0, homeCluster, peerClusters
+	return primaryVRG, secondaryVRGs
 }
 
-func (d *DRPCInstance) validateRelocation(preferredCluster string) (string, error) {
+func (d *DRPCInstance) isReadyForRelocation(preferredCluster string) (string, error) {
 	// Relocation requires preferredCluster to be configured
 	if preferredCluster == "" {
 		return "", fmt.Errorf("preferred cluster not valid")
@@ -600,23 +612,44 @@ func (d *DRPCInstance) validateRelocation(preferredCluster string) (string, erro
 		return "", fmt.Errorf("multiple primaries in transition detected")
 	}
 	// Pre-relocate cleanup
-	ready, homeCluster, secondaries := d.arePeersReady()
-	if !ready {
-		if homeCluster == "" {
-			// Ensure preferred cluster is not reporting as secondary
-			if clusterListContains(secondaries, preferredCluster) {
-				return "", fmt.Errorf("cannot cleanup secondaries, as no valid primary found")
-			}
-		}
-
-		// Ensure secondaries have transitioned to the required state
-		if !d.ensureVRGIsSecondaryEverywhere(homeCluster) {
-			return "", fmt.Errorf("waiting for VRGs to move to secondaries everywhere")
-		}
-	}
+	homeCluster, _ := d.selectPrimaryAndSecondaries()
 
 	return homeCluster, nil
 }
+
+// func (d *DRPCInstance) validateRelocation(preferredCluster string) (string, error) {
+// 	// Relocation requires preferredCluster to be configured
+// 	if preferredCluster == "" {
+// 		return "", fmt.Errorf("preferred cluster not valid")
+// 	}
+
+// 	// No VRGs found, invalid state, possibly deployment was not started
+// 	if len(d.vrgs) == 0 {
+// 		return "", fmt.Errorf("no VRGs exists. Can't relocate")
+// 	}
+
+// 	// Check for at most a single cluster in primary state
+// 	if d.areMultipleVRGsPrimary() {
+// 		return "", fmt.Errorf("multiple primaries in transition detected")
+// 	}
+// 	// Pre-relocate cleanup
+// 	ready, homeCluster, secondaries := d.arePeersReady()
+// 	if !ready {
+// 		if homeCluster == "" {
+// 			// Ensure preferred cluster is not reporting as secondary
+// 			if clusterListContains(secondaries, preferredCluster) {
+// 				return "", fmt.Errorf("cannot cleanup secondaries, as no valid primary found")
+// 			}
+// 		}
+
+// 		// Ensure secondaries have transitioned to the required state
+// 		if !d.ensureVRGIsSecondaryEverywhere(homeCluster) {
+// 			return "", fmt.Errorf("waiting for VRGs to move to secondaries everywhere")
+// 		}
+// 	}
+
+// 	return homeCluster, nil
+// }
 
 // readyToSwitchOver checks whether the PV data is ready and the cluster data has been protected.
 // ClusterDataProtected condition indicates whether all PV related cluster data for an App (Managed
@@ -642,7 +675,8 @@ func (d *DRPCInstance) readyToSwitchOver(homeCluster string, preferredCluster st
 
 func (d *DRPCInstance) checkReadinessAfterFailover(homeCluster string) bool {
 	return d.isVRGConditionReady(homeCluster, VRGConditionTypeDataReady) &&
-		d.isVRGConditionReady(homeCluster, VRGConditionTypeVolSyncRepSourceSetup)
+		(d.isVRGConditionReady(homeCluster, VRGConditionTypeVolSyncRepSourceSetup) ||
+			d.isVRGConditionReady(homeCluster, VRGConditionTypeClusterDataProtected))
 }
 
 func (d *DRPCInstance) isVRGConditionReady(homeCluster string, conditionType string) bool {
@@ -739,13 +773,11 @@ func (d *DRPCInstance) setupRelocation(preferredCluster string) error {
 	clusterToSkip := preferredCluster
 	if !d.ensureVRGIsSecondaryEverywhere(clusterToSkip) {
 		// During relocation, both clusters should be up and both must be secondaries before we proceed.
-		success := d.moveVRGToSecondaryEverywhere()
-		if !success {
+		if !d.moveVRGToSecondaryEverywhere() {
 			return fmt.Errorf("failed to move VRG to secondary everywhere")
 		}
 
-		success = d.ensureVRGIsSecondaryEverywhere("")
-		if !success {
+		if !d.ensureVRGIsSecondaryEverywhere("") {
 			return fmt.Errorf("waiting for VRGs to move to secondaries everywhere")
 		}
 	}

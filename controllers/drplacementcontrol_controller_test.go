@@ -321,6 +321,9 @@ func getVRGFromManifestWork(managedCluster string) (*rmn.VolumeReplicationGroup,
 	err = yaml.Unmarshal(mw.Spec.Workload.Manifests[0].Raw, vrg)
 	Expect(err).NotTo(HaveOccurred())
 
+	// Fake generation:
+	vrg.Generation = 1
+
 	// Always report conditions as a success?
 	vrg.Status.Conditions = append(vrg.Status.Conditions, metav1.Condition{
 		Type:               controllers.VRGConditionTypeClusterDataProtected,
@@ -1412,7 +1415,7 @@ var _ = Describe("DRPlacementControl Reconciler", func() {
 				// {Available and PeerReady}
 				// Final state is 'Deployed'
 				Expect(drpc.Status.Phase).To(Equal(rmn.Deployed))
-				Expect(len(drpc.Status.Conditions)).To(Equal(1))
+				Expect(len(drpc.Status.Conditions)).To(Equal(2))
 				_, condition := getDRPCCondition(&drpc.Status, rmn.ConditionAvailable)
 				Expect(condition.Reason).To(Equal(string(rmn.Deployed)))
 				VolSyncDeploySourceCluster = ""
