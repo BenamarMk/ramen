@@ -808,7 +808,7 @@ func (d *DRPCInstance) createVRGManifestWorkAsPrimary(targetCluster string) (boo
 			return false, nil
 		}
 
-		err := d.updateVRGState(targetCluster, rmn.Primary)
+		err := d.updateVRGState(targetCluster, rmn.Primary, false)
 		if err != nil {
 			d.log.Info(fmt.Sprintf("Failed to update VRG to secondary on cluster %s. Err (%v)", targetCluster, err))
 
@@ -861,7 +861,7 @@ func (d *DRPCInstance) moveVRGToSecondaryEverywhere() bool {
 	for _, drCluster := range d.drPolicy.Spec.DRClusterSet {
 		clusterName := drCluster.Name
 
-		err := d.updateVRGState(clusterName, rmn.Secondary)
+		err := d.updateVRGState(clusterName, rmn.Secondary, true)
 		if err != nil {
 			d.log.Error(err, "Failed to update VRG to secondary", "cluster", clusterName)
 
@@ -887,7 +887,7 @@ func (d *DRPCInstance) moveVRGToSecondaryOnPeers(clusterToSkip string) error {
 			continue
 		}
 
-		err := d.updateVRGState(clusterName, rmn.Secondary)
+		err := d.updateVRGState(clusterName, rmn.Secondary, false)
 		if err != nil {
 			d.log.Info(fmt.Sprintf("Failed to update VRG to secondary on cluster %s. Err (%v)", clusterName, err))
 			needRetry = true
@@ -1416,7 +1416,7 @@ func (d *DRPCInstance) ensureVRGDeleted(clusterName string) bool {
 	return false
 }
 
-func (d *DRPCInstance) updateVRGState(clusterName string, state rmn.ReplicationState) error {
+func (d *DRPCInstance) updateVRGState(clusterName string, state rmn.ReplicationState, runFinalSync bool) error {
 	vrgMWName := d.mwu.BuildManifestWorkName(rmnutil.MWTypeVRG)
 	d.log.Info(fmt.Sprintf("Updating VRG ownedby MW %s to secondary for cluster %s", vrgMWName, clusterName))
 
@@ -1446,6 +1446,7 @@ func (d *DRPCInstance) updateVRGState(clusterName string, state rmn.ReplicationS
 	}
 
 	vrg.Spec.ReplicationState = state
+	vrg.Spec.VolSync.RunFinalSync = runFinalSync
 
 	vrgClientManifest, err := d.mwu.GenerateManifest(vrg)
 	if err != nil {
