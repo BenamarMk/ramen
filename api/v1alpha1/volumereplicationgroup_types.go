@@ -103,29 +103,17 @@ type VRGSyncSpec struct {
 // VolSyncReplicationDestinationSpec defines the configuration for the VolSync
 // protected PVC to be used by the destination cluster (Secondary)
 type VolSyncReplicationDestinationSpec struct {
-	// protectedPVC contains the information about the PVC protected by VolSync
+	// protectedPVC contains the information about the PVC to be protected by VolSync
 	//+optional
 	ProtectedPVC ProtectedPVC `json:"protectedPVCs,omitempty"`
-
-	// sshKeys is the name of a Secret that contains the SSH keys to be used for
-	// authentication.
-	//+optional
-	SSHKeys string `json:"sshKeys,omitempty"`
 }
 
 // VolSyncReplicationSourceSpec defines the configuration for the VolSync
 // protected PVC to be used by the source cluster (Primary)
 type VolSyncReplicationSourceSpec struct {
-	// pvcName is the name of the PVC that VolSync will replicate to the destinatioin
-	PVCName string `json:"pvcName"`
-
-	// address is the address to connect to for incoming SSH replication
-	// connections.
-	Address string `json:"address"`
-	// sshKeys is the name of a Secret that contains the SSH keys to be used for
-	// authentication.
+	// protectedPVC contains the information about the PVC to be protected by VolSync
 	//+optional
-	SSHKeys string `json:"sshKeys,omitempty"`
+	ProtectedPVC ProtectedPVC `json:"protectedPVCs,omitempty"`
 }
 
 // VolSynccSpec defines the ReplicationDestination specs for the Secondary VRG, or
@@ -138,16 +126,6 @@ type VolSyncSpec struct {
 	// runFinalSync used to indicate whether final sync is needed. Final sync is needed for relocation only.
 	//+optional
 	RunFinalSync bool `json:"runFinalSync,omitempty"`
-}
-
-// VolSyncReplicationDestinationInfo defines the VolSync PVC information that
-// the ReplicationDestination was setup for.
-type VolSyncReplicationDestinationInfo struct {
-	// pvcName is the name of the PVC that will be replicated by VolSync
-	PVCName string `json:"pvcName"`
-
-	// address is the address to connect to for incoming SSH replication connections.
-	Address string `json:"address"`
 }
 
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.

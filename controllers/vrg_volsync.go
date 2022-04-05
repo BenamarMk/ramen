@@ -70,10 +70,31 @@ func (v *VRGInstance) restorePVsForVolSync() error {
 	return nil
 }
 
-func (v *VRGInstance) reconcileVolSyncAsPrimary() bool {
+func (v *VRGInstance) reconcileVolSyncAsPrimary() (requeue bool) {
 	v.log.Info("Reconciling VolSync as Primary", "volSync", v.instance.Spec.VolSync)
 
-	allSucceeded := true
+	requeue = false
+
+	// Cleanup - this VRG is primary, cleanup if necessary
+	// remove any ReplicationDestinations (that would have been created when this VRG was secondary) if they
+	// are not in the RDSpec list
+	if err := v.volSyncHandler.CleanupRDNotInSpecList(v.instance.Spec.VolSync.RDSpec); err != nil {
+		v.log.Error(err, "Failed to cleanup the RDSpecs when this VRG instance was secondary")
+
+		requeue = true
+		return
+	}
+
+	// Extra check - do not continue on and protect PVCs until the spec has been cleared of RDs.  This is to prevent
+	// a scenario where we might have a replicationdestination still running locally (with exported service) and
+	// then create a replicationsource that then connects to it, instead of connecting to a replicationdestination
+	// on the secondary cluster
+	if len(v.instance.Spec.VolSync.RDSpec) != 0 {
+		v.log.Info("Spec contains RDSpecs (on primary) - will not continue to reconcile ReplicationSources " +
+			"until RDSpec is empty")
+		requeue = true
+		return
+	}
 
 	// First time: Add all VolSync PVCs to the protected PVC list and set their ready condition to initializing
 	for _, pvc := range v.volSyncPVCs {
@@ -93,13 +114,13 @@ func (v *VRGInstance) reconcileVolSyncAsPrimary() bool {
 			newProtectedPVC.DeepCopyInto(protectedPVC)
 		}
 
+		// Not much need for VolSyncReplicationSourceSpec anymore - but keeping it around in case we want
+		// to add anything to it later to control anything in the ReplicationSource
 		rsSpec := ramendrv1alpha1.VolSyncReplicationSourceSpec{
-			PVCName: pvc.Name,
-			Address: "address.of.destination.ip", //FIXME:
-			SSHKeys: "test-volsync-ssh-keys",     //FIXME:
+			ProtectedPVC: *protectedPVC,
 		}
 
-		_, err := v.volSyncHandler.ReconcileRS(rsSpec, false /* Schedule sync normally */)
+		_, rs, err := v.volSyncHandler.ReconcileRS(rsSpec, false /* Schedule sync normally */)
 		if err != nil {
 			v.log.Info(fmt.Sprintf("Failed to reconcile VolSync Replication Source for rsSpec %v. Error %v",
 				rsSpec, err))
@@ -107,48 +128,38 @@ func (v *VRGInstance) reconcileVolSyncAsPrimary() bool {
 			setVRGConditionTypeVolSyncRepSourceSetupError(&protectedPVC.Conditions, v.instance.Generation,
 				"VolSync setup failed")
 
-			allSucceeded = false
-		}
-
-		setVRGConditionTypeVolSyncRepSourceSetupComplete(&protectedPVC.Conditions, v.instance.Generation, "Ready")
-
-		//TODO: cleanup any RS that is not in rsSpec?
-
-		// Cleanup - this VRG is primary, cleanup if necessary
-		// remove ReplicationDestinations that would have been created when this VRG was
-		// secondary if they are not in the RDSpec list
-		if err := v.volSyncHandler.CleanupRDNotInSpecList(v.instance.Spec.VolSync.RDSpec); err != nil {
-			v.log.Error(err, "Failed to cleanup the RDSpecs when this VRG instance was secondary")
-
-			return false
+			requeue = true
+		} else if rs == nil {
+			// Replication source is not ready yet //TODO: do we need a condition for this?
+			requeue = true
+		} else {
+			setVRGConditionTypeVolSyncRepSourceSetupComplete(&protectedPVC.Conditions, v.instance.Generation, "Ready")
 		}
 	}
 
-	if !allSucceeded {
-		v.log.Info("Not all Repliation Sources succeeded setup")
-
-		return false
+	if requeue {
+		v.log.Info("Not all ReplicationSources completed setup. We'll retry...")
+		return
 	}
 
 	v.log.Info("Successfully reconciled VolSync as Primary")
 
-	return true
+	return
 }
 
-func (v *VRGInstance) reconcileVolSyncAsSecondary() bool {
+func (v *VRGInstance) reconcileVolSyncAsSecondary() (requeue bool) {
 	v.log.Info("Reconcile VolSync as Secondary", "RDSpec", v.instance.Spec.VolSync.RDSpec)
 
+	requeue = false
+
 	if v.instance.Spec.VolSync.RunFinalSync {
-		var notAllFinalSynsAreComplete bool
 		for _, protectedPVC := range v.instance.Status.ProtectedPVCs {
 			if protectedPVC.ProtectedByVolSync {
 				rsSpec := ramendrv1alpha1.VolSyncReplicationSourceSpec{
-					PVCName: protectedPVC.Name,
-					Address: "address.of.destination.ip", //FIXME:
-					SSHKeys: "test-volsync-ssh-keys",     //FIXME:
+					ProtectedPVC: protectedPVC,
 				}
 
-				finalSyncComplete, err := v.volSyncHandler.ReconcileRS(rsSpec, true)
+				finalSyncComplete, _, err := v.volSyncHandler.ReconcileRS(rsSpec, true /* run final sync */)
 				if err != nil {
 					v.log.Info(fmt.Sprintf("Failed to run final sync for rsSpec %v. Error %v",
 						rsSpec, err))
@@ -156,14 +167,17 @@ func (v *VRGInstance) reconcileVolSyncAsSecondary() bool {
 				}
 
 				if !finalSyncComplete {
-					notAllFinalSynsAreComplete = true
+					requeue = true
 				}
 			}
 		}
 
-		if notAllFinalSynsAreComplete {
-			return false
+		if requeue {
+			v.log.Info("Waiting for final sync of ReplicationSources to complete ...")
+			return
 		}
+
+		v.log.Info("Final sync of ReplicationSources is complete")
 	}
 
 	// If we are secondary, and RDSpec is not set, then we don't want to have any PVC
@@ -181,36 +195,40 @@ func (v *VRGInstance) reconcileVolSyncAsSecondary() bool {
 		v.log.Info("Protected PVCs left", "ProtectedPVCs", v.instance.Status.ProtectedPVCs)
 	}
 
-	shouldWait := false
-
 	// Reconcile RDSpec (deletion or replication)
 	for _, rdSpec := range v.instance.Spec.VolSync.RDSpec {
-		_, err := v.volSyncHandler.ReconcileRD(rdSpec)
+		v.log.Info("Reconcile RD as Secondary", "RDSpec", rdSpec)
+		rd, err := v.volSyncHandler.ReconcileRD(rdSpec)
 		if err != nil {
 			v.log.Error(err, "Failed to reconcile VolSync Replication Destination")
 
-			return false
+			requeue = true
+			return
+		}
+
+		if rd == nil {
+			// Replication destination is not ready yet, indicate we should requeue after the for loop is complete
+			requeue = true
 		}
 
 		// Cleanup - this VRG is secondary, cleanup if necessary
-		// remove ReplicationSources that would have been created when this VRG was
-		// primary if they are not in the RSSpec list
+		// remove ReplicationSources that would have been created when this VRG was primary
 		if err := v.volSyncHandler.DeleteRS(rdSpec.ProtectedPVC.Name); err != nil {
 			v.log.Error(err, "Failed to delete RS from when this VRG instance was primary")
 
-			return false
+			requeue = true
+			return
 		}
 
 		// setVRGConditionTypeVolSyncRepDestSetupComplete(&protectedPVC.Conditions, v.instance.Generation, "Ready")
 	}
 
-	if shouldWait {
-		v.log.Info("ReconcileRD didn't succeed. We'll retry...")
-
-		return false
+	if requeue {
+		v.log.Info("ReconcileRD - ReplicationDestinations are not all ready. We'll retry...")
+		return
 	}
 
 	v.log.Info("Successfully reconciled VolSync as Secondary")
 
-	return true
+	return
 }

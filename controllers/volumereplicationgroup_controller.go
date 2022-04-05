@@ -303,12 +303,7 @@ func (r *VolumeReplicationGroupReconciler) Reconcile(ctx context.Context, req ct
 			req.NamespacedName, err)
 	}
 
-	v.volSyncHandler = volsync.NewVSHandler(
-		ctx, r.Client, log, v.instance, v.instance.Spec.Async.SchedulingInterval,
-		&ramendrv1alpha1.VolSyncProfile{
-			VolSyncProfileName: "default",
-			ServiceType:        &volsync.DefaultRsyncServiceType,
-		})
+	v.volSyncHandler = volsync.NewVSHandler(ctx, r.Client, log, v.instance, v.instance.Spec.Async.SchedulingInterval)
 
 	// Save a copy of the instance status to be used for the VRG status update comparison
 	v.instance.Status.DeepCopyInto(&v.savedInstanceStatus)
@@ -608,12 +603,17 @@ func (v *VRGInstance) separatePVCsUsingStorageClassProvisioner(pvcList *corev1.P
 			return fmt.Errorf("failed to get the storageclass with name %s (%w)", *scName, err)
 		}
 
+		replicationClassMatchFound := false
 		for _, replicationClass := range v.replClassList.Items {
-			if storageClass.Provisioner != replicationClass.Spec.Provisioner {
-				v.volSyncPVCs = append(v.volSyncPVCs, *pvc)
-			} else {
+			if storageClass.Provisioner == replicationClass.Spec.Provisioner {
 				v.volRepPVCs = append(v.volRepPVCs, *pvc)
+				replicationClassMatchFound = true
+				break
 			}
+		}
+
+		if !replicationClassMatchFound {
+			v.volSyncPVCs = append(v.volSyncPVCs, *pvc)
 		}
 	}
 
@@ -744,7 +744,7 @@ func (v *VRGInstance) processAsPrimary() (ctrl.Result, error) {
 }
 
 func (v *VRGInstance) reconcileAsPrimary() bool {
-	if len(v.volSyncPVCs) != 0 && !v.reconcileVolSyncAsPrimary() {
+	if len(v.volSyncPVCs) != 0 && v.reconcileVolSyncAsPrimary() {
 		return true // requeue
 	}
 
@@ -797,7 +797,7 @@ func (v *VRGInstance) processAsSecondary() (ctrl.Result, error) {
 }
 
 func (v *VRGInstance) reconcileAsSecondary() bool {
-	if !v.reconcileVolSyncAsSecondary() {
+	if v.reconcileVolSyncAsSecondary() {
 		return true // requeue
 	}
 
