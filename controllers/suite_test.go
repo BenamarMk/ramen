@@ -51,7 +51,6 @@ import (
 	gppv1 "github.com/stolostron/governance-policy-propagator/api/v1"
 	viewv1beta1 "github.com/stolostron/multicloud-operators-foundation/pkg/apis/view/v1beta1"
 	plrv1 "github.com/stolostron/multicloud-operators-placementrule/pkg/apis/apps/v1"
-	subv1 "github.com/stolostron/multicloud-operators-subscription/pkg/apis/apps/v1"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -128,9 +127,6 @@ var _ = BeforeSuite(func() {
 	Expect(err).NotTo(HaveOccurred())
 
 	err = plrv1.AddToScheme(scheme.Scheme)
-	Expect(err).NotTo(HaveOccurred())
-
-	err = subv1.SchemeBuilder.AddToScheme(scheme.Scheme)
 	Expect(err).NotTo(HaveOccurred())
 
 	err = viewv1beta1.AddToScheme(scheme.Scheme)
