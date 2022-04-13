@@ -271,6 +271,7 @@ func (f FakeMCVGetter) GetVRGFromManagedCluster(
 	reason := controllers.VRGConditionReasonReplicating
 	vrgStatus := rmn.VolumeReplicationGroupStatus{
 		State: rmn.PrimaryState,
+		FinalSyncComplete: true,
 		Conditions: []metav1.Condition{
 			{
 				Type:               conType,
