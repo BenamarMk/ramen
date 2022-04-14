@@ -810,7 +810,7 @@ func (d *DRPCInstance) createVRGManifestWorkAsPrimary(targetCluster string) (boo
 
 		err := d.updateVRGState(targetCluster, rmn.Primary, false)
 		if err != nil {
-			d.log.Info(fmt.Sprintf("Failed to update VRG to secondary on cluster %s. Err (%v)", targetCluster, err))
+			d.log.Info(fmt.Sprintf("Failed to update VRG to primary on cluster %s. Err (%v)", targetCluster, err))
 
 			return false, err
 		}
@@ -1418,7 +1418,7 @@ func (d *DRPCInstance) ensureVRGDeleted(clusterName string) bool {
 
 func (d *DRPCInstance) updateVRGState(clusterName string, state rmn.ReplicationState, runFinalSync bool) error {
 	vrgMWName := d.mwu.BuildManifestWorkName(rmnutil.MWTypeVRG)
-	d.log.Info(fmt.Sprintf("Updating VRG ownedby MW %s to secondary for cluster %s", vrgMWName, clusterName))
+	d.log.Info(fmt.Sprintf("Updating VRG ownedby MW %s to %s for cluster %s", vrgMWName, state, clusterName))
 
 	mw, err := d.mwu.FindManifestWork(vrgMWName, clusterName)
 	if err != nil {
@@ -1462,7 +1462,7 @@ func (d *DRPCInstance) updateVRGState(clusterName string, state rmn.ReplicationS
 		return fmt.Errorf("failed to update MW (%w)", err)
 	}
 
-	d.log.Info(fmt.Sprintf("Updated VRG running in cluster %s to secondary. VRG (%v)", clusterName, vrg))
+	d.log.Info(fmt.Sprintf("Updated VRG running in cluster %s to %s. VRG (%v)", clusterName, state, vrg))
 
 	return nil
 }
