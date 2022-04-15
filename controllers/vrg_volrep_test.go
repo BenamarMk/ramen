@@ -713,6 +713,9 @@ func (v *vrgTest) createVRG(pvcLabels map[string]string) {
 			Sync: ramendrv1alpha1.VRGSyncSpec{
 				Mode: ramendrv1alpha1.SyncModeDisabled,
 			},
+			VolSync: ramendrv1alpha1.VolSyncSpec{
+				Disabled: true,
+			},
 			S3Profiles: []string{S3ProfileName},
 		},
 	}
