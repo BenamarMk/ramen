@@ -36,323 +36,323 @@ var _ = Describe("Test VolumeReplicationGroup", func() {
 		s3ProfilesSetup()
 	})
 	// Test first restore
-	// Context("restore test case", func() {
-	// 	It("sets vrg for restore", func() {
-	// 		newVRGTestCase(0)
-	// 		waitForPVRestore()
-	// 	})
-	// })
+	Context("restore test case", func() {
+		It("sets vrg for restore", func() {
+			newVRGTestCase(0)
+			waitForPVRestore()
+		})
+	})
 
-	// // Try the simple case of creating VRG, PVC, PV and
-	// // check whether VolRep resources are created or not
-	// var vrgTestCases []vrgTest
-	// Context("in primary state", func() {
-	// 	It("sets up PVCs, PVs and VRGs", func() {
-	// 		for c := 0; c < 5; c++ {
-	// 			v := newVRGTestCase(c)
-	// 			vrgTestCases = append(vrgTestCases, v)
-	// 		}
-	// 	})
-	// 	It("waits for VRG to create a VR for each PVC", func() {
-	// 		for c := 0; c < len(vrgTestCases); c++ {
-	// 			v := vrgTestCases[c]
-	// 			expectedVRCount := len(v.pvcNames)
-	// 			v.waitForVRCountToMatch(expectedVRCount)
-	// 		}
-	// 	})
-	// 	It("waits for VRG to status to match", func() {
-	// 		for c := 0; c < len(vrgTestCases); c++ {
-	// 			v := vrgTestCases[c]
-	// 			v.promoteVolReps()
-	// 			if c != 0 {
-	// 				v.verifyVRGStatusExpectation(true)
-	// 			} else {
-	// 				v.verifyVRGStatusExpectation(false)
-	// 			}
-	// 		}
-	// 	})
-	// 	It("cleans up after testing", func() {
-	// 		for c := 0; c < len(vrgTestCases); c++ {
-	// 			v := vrgTestCases[c]
-	// 			v.cleanup()
-	// 		}
-	// 	})
-	// })
+	// Try the simple case of creating VRG, PVC, PV and
+	// check whether VolRep resources are created or not
+	var vrgTestCases []vrgTest
+	Context("in primary state", func() {
+		It("sets up PVCs, PVs and VRGs", func() {
+			for c := 0; c < 5; c++ {
+				v := newVRGTestCase(c)
+				vrgTestCases = append(vrgTestCases, v)
+			}
+		})
+		It("waits for VRG to create a VR for each PVC", func() {
+			for c := 0; c < len(vrgTestCases); c++ {
+				v := vrgTestCases[c]
+				expectedVRCount := len(v.pvcNames)
+				v.waitForVRCountToMatch(expectedVRCount)
+			}
+		})
+		It("waits for VRG to status to match", func() {
+			for c := 0; c < len(vrgTestCases); c++ {
+				v := vrgTestCases[c]
+				v.promoteVolReps()
+				if c != 0 {
+					v.verifyVRGStatusExpectation(true)
+				} else {
+					v.verifyVRGStatusExpectation(false)
+				}
+			}
+		})
+		It("cleans up after testing", func() {
+			for c := 0; c < len(vrgTestCases); c++ {
+				v := vrgTestCases[c]
+				v.cleanup()
+			}
+		})
+	})
 
-	// // Creates VRG. PVCs and PV are created with Status.Phase
-	// // set to pending and VolRep should not be created until
-	// // all the PVCs and PVs are bound. So, these tests then
-	// // change the Status.Phase of PVCs and PVs to bound state,
-	// // and then checks whether appropriate number of VolRep
-	// // resources have been created or not.
-	// var vrgTests []vrgTest
-	// vrgTestTemplate := &template{
-	// 	ClaimBindInfo:          corev1.ClaimPending,
-	// 	VolumeBindInfo:         corev1.VolumePending,
-	// 	schedulingInterval:     "1h",
-	// 	storageClassName:       "manual",
-	// 	replicationClassName:   "test-replicationclass",
-	// 	vrcProvisioner:         "manual.storage.com",
-	// 	scProvisioner:          "manual.storage.com",
-	// 	replicationClassLabels: map[string]string{"protection": "ramen"},
-	// }
+	// Creates VRG. PVCs and PV are created with Status.Phase
+	// set to pending and VolRep should not be created until
+	// all the PVCs and PVs are bound. So, these tests then
+	// change the Status.Phase of PVCs and PVs to bound state,
+	// and then checks whether appropriate number of VolRep
+	// resources have been created or not.
+	var vrgTests []vrgTest
+	vrgTestTemplate := &template{
+		ClaimBindInfo:          corev1.ClaimPending,
+		VolumeBindInfo:         corev1.VolumePending,
+		schedulingInterval:     "1h",
+		storageClassName:       "manual",
+		replicationClassName:   "test-replicationclass",
+		vrcProvisioner:         "manual.storage.com",
+		scProvisioner:          "manual.storage.com",
+		replicationClassLabels: map[string]string{"protection": "ramen"},
+	}
 
-	// Context("in primary state", func() {
-	// 	It("sets up non-bound PVCs, PVs and then bind them", func() {
-	// 		for c := 0; c < 5; c++ {
-	// 			// Test the scenario where the pvc is not bound yet
-	// 			// and expect no VRs to be created.
-	// 			v := newVRGTestCaseBindInfo(c, vrgTestTemplate, false, false)
-	// 			vrgTests = append(vrgTests, v)
-	// 		}
-	// 	})
-	// 	It("expect no VR to be created as PVC not bound", func() {
-	// 		for c := 0; c < len(vrgTests); c++ {
-	// 			v := vrgTests[c]
-	// 			v.waitForVRCountToMatch(0)
-	// 		}
-	// 	})
-	// 	It("bind each pv to corresponding pvc", func() {
-	// 		for c := 0; c < len(vrgTests); c++ {
-	// 			v := vrgTests[c]
-	// 			v.bindPVAndPVC()
-	// 			v.verifyPVCBindingToPV(true)
-	// 		}
-	// 	})
-	// 	It("waits for VRG to create a VR for each PVC bind", func() {
-	// 		for c := 0; c < len(vrgTests); c++ {
-	// 			v := vrgTests[c]
-	// 			expectedVRCount := len(v.pvcNames)
-	// 			v.waitForVRCountToMatch(expectedVRCount)
-	// 		}
-	// 	})
-	// 	It("waits for VRG to status to match", func() {
-	// 		for c := 0; c < len(vrgTests); c++ {
-	// 			v := vrgTests[c]
-	// 			v.promoteVolReps()
-	// 			if c != 0 {
-	// 				v.verifyVRGStatusExpectation(true)
-	// 			} else {
-	// 				v.verifyVRGStatusExpectation(false)
-	// 			}
-	// 		}
-	// 	})
-	// 	It("cleans up after testing", func() {
-	// 		for c := 0; c < len(vrgTests); c++ {
-	// 			v := vrgTests[c]
-	// 			v.cleanup()
-	// 		}
-	// 	})
-	// })
+	Context("in primary state", func() {
+		It("sets up non-bound PVCs, PVs and then bind them", func() {
+			for c := 0; c < 5; c++ {
+				// Test the scenario where the pvc is not bound yet
+				// and expect no VRs to be created.
+				v := newVRGTestCaseBindInfo(c, vrgTestTemplate, false, false)
+				vrgTests = append(vrgTests, v)
+			}
+		})
+		It("expect no VR to be created as PVC not bound", func() {
+			for c := 0; c < len(vrgTests); c++ {
+				v := vrgTests[c]
+				v.waitForVRCountToMatch(0)
+			}
+		})
+		It("bind each pv to corresponding pvc", func() {
+			for c := 0; c < len(vrgTests); c++ {
+				v := vrgTests[c]
+				v.bindPVAndPVC()
+				v.verifyPVCBindingToPV(true)
+			}
+		})
+		It("waits for VRG to create a VR for each PVC bind", func() {
+			for c := 0; c < len(vrgTests); c++ {
+				v := vrgTests[c]
+				expectedVRCount := len(v.pvcNames)
+				v.waitForVRCountToMatch(expectedVRCount)
+			}
+		})
+		It("waits for VRG to status to match", func() {
+			for c := 0; c < len(vrgTests); c++ {
+				v := vrgTests[c]
+				v.promoteVolReps()
+				if c != 0 {
+					v.verifyVRGStatusExpectation(true)
+				} else {
+					v.verifyVRGStatusExpectation(false)
+				}
+			}
+		})
+		It("cleans up after testing", func() {
+			for c := 0; c < len(vrgTests); c++ {
+				v := vrgTests[c]
+				v.cleanup()
+			}
+		})
+	})
 
-	// var vrgStatusTests []vrgTest
-	// Context("in primary state status check pending to bound", func() {
-	// 	It("sets up non-bound PVCs, PVs and then bind them", func() {
-	// 		v := newVRGTestCaseBindInfo(4, vrgTestTemplate, false, false)
-	// 		vrgStatusTests = append(vrgStatusTests, v)
-	// 	})
-	// 	It("expect no VR to be created as PVC not bound and check status", func() {
-	// 		v := vrgStatusTests[0]
-	// 		v.waitForVRCountToMatch(0)
-	// 	})
-	// 	It("bind each pv to corresponding pvc", func() {
-	// 		v := vrgStatusTests[0]
-	// 		v.bindPVAndPVC()
-	// 		v.verifyPVCBindingToPV(true)
-	// 	})
-	// 	It("waits for VRG to create a VR for each PVC bind and checks status", func() {
-	// 		v := vrgStatusTests[0]
-	// 		expectedVRCount := len(v.pvcNames)
-	// 		v.waitForVRCountToMatch(expectedVRCount)
-	// 	})
-	// 	It("waits for VRG to status to match", func() {
-	// 		v := vrgStatusTests[0]
-	// 		v.promoteVolReps()
-	// 		v.verifyVRGStatusExpectation(true)
-	// 	})
-	// 	It("cleans up after testing", func() {
-	// 		v := vrgStatusTests[0]
-	// 		v.cleanup()
-	// 	})
-	// })
+	var vrgStatusTests []vrgTest
+	Context("in primary state status check pending to bound", func() {
+		It("sets up non-bound PVCs, PVs and then bind them", func() {
+			v := newVRGTestCaseBindInfo(4, vrgTestTemplate, false, false)
+			vrgStatusTests = append(vrgStatusTests, v)
+		})
+		It("expect no VR to be created as PVC not bound and check status", func() {
+			v := vrgStatusTests[0]
+			v.waitForVRCountToMatch(0)
+		})
+		It("bind each pv to corresponding pvc", func() {
+			v := vrgStatusTests[0]
+			v.bindPVAndPVC()
+			v.verifyPVCBindingToPV(true)
+		})
+		It("waits for VRG to create a VR for each PVC bind and checks status", func() {
+			v := vrgStatusTests[0]
+			expectedVRCount := len(v.pvcNames)
+			v.waitForVRCountToMatch(expectedVRCount)
+		})
+		It("waits for VRG to status to match", func() {
+			v := vrgStatusTests[0]
+			v.promoteVolReps()
+			v.verifyVRGStatusExpectation(true)
+		})
+		It("cleans up after testing", func() {
+			v := vrgStatusTests[0]
+			v.cleanup()
+		})
+	})
 
-	// // Changes the order in which VRG and PVC/PV are created.
+	// Changes the order in which VRG and PVC/PV are created.
 
-	// vrgTest2Template := &template{
-	// 	ClaimBindInfo:          corev1.ClaimBound,
-	// 	VolumeBindInfo:         corev1.VolumeBound,
-	// 	schedulingInterval:     "1h",
-	// 	storageClassName:       "manual",
-	// 	replicationClassName:   "test-replicationclass",
-	// 	vrcProvisioner:         "manual.storage.com",
-	// 	scProvisioner:          "manual.storage.com",
-	// 	replicationClassLabels: map[string]string{"protection": "ramen"},
-	// }
-	// var vrgStatus2Tests []vrgTest
-	// Context("in primary state status check bound", func() {
-	// 	It("sets up PVCs, PVs", func() {
-	// 		v := newVRGTestCaseBindInfo(4, vrgTest2Template, true, true)
-	// 		vrgStatus2Tests = append(vrgStatus2Tests, v)
-	// 	})
-	// 	It("waits for VRG to create a VR for each PVC bind and checks status", func() {
-	// 		v := vrgStatus2Tests[0]
-	// 		expectedVRCount := len(v.pvcNames)
-	// 		v.waitForVRCountToMatch(expectedVRCount)
-	// 	})
-	// 	It("waits for VRG to status to match", func() {
-	// 		v := vrgStatus2Tests[0]
-	// 		v.promoteVolReps()
-	// 		v.verifyVRGStatusExpectation(true)
-	// 	})
-	// 	It("cleans up after testing", func() {
-	// 		v := vrgStatus2Tests[0]
-	// 		v.cleanup()
-	// 	})
-	// })
+	vrgTest2Template := &template{
+		ClaimBindInfo:          corev1.ClaimBound,
+		VolumeBindInfo:         corev1.VolumeBound,
+		schedulingInterval:     "1h",
+		storageClassName:       "manual",
+		replicationClassName:   "test-replicationclass",
+		vrcProvisioner:         "manual.storage.com",
+		scProvisioner:          "manual.storage.com",
+		replicationClassLabels: map[string]string{"protection": "ramen"},
+	}
+	var vrgStatus2Tests []vrgTest
+	Context("in primary state status check bound", func() {
+		It("sets up PVCs, PVs", func() {
+			v := newVRGTestCaseBindInfo(4, vrgTest2Template, true, true)
+			vrgStatus2Tests = append(vrgStatus2Tests, v)
+		})
+		It("waits for VRG to create a VR for each PVC bind and checks status", func() {
+			v := vrgStatus2Tests[0]
+			expectedVRCount := len(v.pvcNames)
+			v.waitForVRCountToMatch(expectedVRCount)
+		})
+		It("waits for VRG to status to match", func() {
+			v := vrgStatus2Tests[0]
+			v.promoteVolReps()
+			v.verifyVRGStatusExpectation(true)
+		})
+		It("cleans up after testing", func() {
+			v := vrgStatus2Tests[0]
+			v.cleanup()
+		})
+	})
 
-	// // Changes the order in which VRG and PVC/PV are created. VRG is created first and then
-	// // PVC/PV are created (with ClaimPending and VolumePending status respectively). Then
-	// // each of them is bound and the result should be same (i.e. VRG being available).
-	// vrgTest3Template := &template{
-	// 	ClaimBindInfo:          corev1.ClaimPending,
-	// 	VolumeBindInfo:         corev1.VolumePending,
-	// 	schedulingInterval:     "1h",
-	// 	storageClassName:       "manual",
-	// 	replicationClassName:   "test-replicationclass",
-	// 	vrcProvisioner:         "manual.storage.com",
-	// 	scProvisioner:          "manual.storage.com",
-	// 	replicationClassLabels: map[string]string{"protection": "ramen"},
-	// }
-	// var vrgStatus3Tests []vrgTest
-	// Context("in primary state status check create VRG first", func() {
-	// 	It("sets up non-bound PVCs, PVs and then bind them", func() {
-	// 		v := newVRGTestCaseBindInfo(4, vrgTest3Template, false, true)
-	// 		vrgStatus3Tests = append(vrgStatus3Tests, v)
-	// 	})
-	// 	It("expect no VR to be created as PVC not bound and check status", func() {
-	// 		v := vrgStatus3Tests[0]
-	// 		v.waitForVRCountToMatch(0)
-	// 		// v.verifyVRGStatusExpectation(false)
-	// 	})
-	// 	It("bind each pv to corresponding pvc", func() {
-	// 		v := vrgStatus3Tests[0]
-	// 		v.bindPVAndPVC()
-	// 		v.verifyPVCBindingToPV(true)
-	// 	})
-	// 	It("waits for VRG to create a VR for each PVC bind and checks status", func() {
-	// 		v := vrgStatus3Tests[0]
-	// 		expectedVRCount := len(v.pvcNames)
-	// 		v.waitForVRCountToMatch(expectedVRCount)
-	// 	})
-	// 	It("waits for VRG to status to match", func() {
-	// 		v := vrgStatus3Tests[0]
-	// 		v.promoteVolReps()
-	// 		v.verifyVRGStatusExpectation(true)
-	// 	})
-	// 	It("cleans up after testing", func() {
-	// 		v := vrgStatus3Tests[0]
-	// 		v.cleanup()
-	// 	})
-	// })
+	// Changes the order in which VRG and PVC/PV are created. VRG is created first and then
+	// PVC/PV are created (with ClaimPending and VolumePending status respectively). Then
+	// each of them is bound and the result should be same (i.e. VRG being available).
+	vrgTest3Template := &template{
+		ClaimBindInfo:          corev1.ClaimPending,
+		VolumeBindInfo:         corev1.VolumePending,
+		schedulingInterval:     "1h",
+		storageClassName:       "manual",
+		replicationClassName:   "test-replicationclass",
+		vrcProvisioner:         "manual.storage.com",
+		scProvisioner:          "manual.storage.com",
+		replicationClassLabels: map[string]string{"protection": "ramen"},
+	}
+	var vrgStatus3Tests []vrgTest
+	Context("in primary state status check create VRG first", func() {
+		It("sets up non-bound PVCs, PVs and then bind them", func() {
+			v := newVRGTestCaseBindInfo(4, vrgTest3Template, false, true)
+			vrgStatus3Tests = append(vrgStatus3Tests, v)
+		})
+		It("expect no VR to be created as PVC not bound and check status", func() {
+			v := vrgStatus3Tests[0]
+			v.waitForVRCountToMatch(0)
+			// v.verifyVRGStatusExpectation(false)
+		})
+		It("bind each pv to corresponding pvc", func() {
+			v := vrgStatus3Tests[0]
+			v.bindPVAndPVC()
+			v.verifyPVCBindingToPV(true)
+		})
+		It("waits for VRG to create a VR for each PVC bind and checks status", func() {
+			v := vrgStatus3Tests[0]
+			expectedVRCount := len(v.pvcNames)
+			v.waitForVRCountToMatch(expectedVRCount)
+		})
+		It("waits for VRG to status to match", func() {
+			v := vrgStatus3Tests[0]
+			v.promoteVolReps()
+			v.verifyVRGStatusExpectation(true)
+		})
+		It("cleans up after testing", func() {
+			v := vrgStatus3Tests[0]
+			v.cleanup()
+		})
+	})
 
-	// // VolumeReplicationClass provisioner and StorageClass provisioner
-	// // does not match. VolumeReplication resources should not be created.
-	// var vrgScheduleTests []vrgTest
-	// vrgScheduleTestTemplate := &template{
-	// 	ClaimBindInfo:          corev1.ClaimBound,
-	// 	VolumeBindInfo:         corev1.VolumeBound,
-	// 	schedulingInterval:     "1h",
-	// 	storageClassName:       "manual",
-	// 	replicationClassName:   "test-replicationclass",
-	// 	vrcProvisioner:         "manual.storage.com",
-	// 	scProvisioner:          "new.storage.com",
-	// 	replicationClassLabels: map[string]string{"protection": "ramen"},
-	// }
-	// Context("schedule test, provisioner does not match", func() {
-	// 	It("sets up non-bound PVCs, PVs and then bind them", func() {
-	// 		v := newVRGTestCaseBindInfo(4, vrgScheduleTestTemplate, true, true)
-	// 		vrgScheduleTests = append(vrgScheduleTests, v)
-	// 	})
-	// 	It("expect no VR to be created as PVC not bound and check status", func() {
-	// 		v := vrgScheduleTests[0]
-	// 		v.waitForVRCountToMatch(0)
-	// 		// v.verifyVRGStatusExpectation(false)
-	// 	})
-	// 	It("waits for VRG to status to match", func() {
-	// 		v := vrgScheduleTests[0]
-	// 		v.verifyVRGStatusExpectation(false)
-	// 	})
-	// 	It("cleans up after testing", func() {
-	// 		v := vrgScheduleTests[0]
-	// 		v.cleanup()
-	// 	})
-	// })
+	// VolumeReplicationClass provisioner and StorageClass provisioner
+	// does not match. VolumeReplication resources should not be created.
+	var vrgScheduleTests []vrgTest
+	vrgScheduleTestTemplate := &template{
+		ClaimBindInfo:          corev1.ClaimBound,
+		VolumeBindInfo:         corev1.VolumeBound,
+		schedulingInterval:     "1h",
+		storageClassName:       "manual",
+		replicationClassName:   "test-replicationclass",
+		vrcProvisioner:         "manual.storage.com",
+		scProvisioner:          "new.storage.com",
+		replicationClassLabels: map[string]string{"protection": "ramen"},
+	}
+	Context("schedule test, provisioner does not match", func() {
+		It("sets up non-bound PVCs, PVs and then bind them", func() {
+			v := newVRGTestCaseBindInfo(4, vrgScheduleTestTemplate, true, true)
+			vrgScheduleTests = append(vrgScheduleTests, v)
+		})
+		It("expect no VR to be created as PVC not bound and check status", func() {
+			v := vrgScheduleTests[0]
+			v.waitForVRCountToMatch(0)
+			// v.verifyVRGStatusExpectation(false)
+		})
+		It("waits for VRG to status to match", func() {
+			v := vrgScheduleTests[0]
+			v.verifyVRGStatusExpectation(false)
+		})
+		It("cleans up after testing", func() {
+			v := vrgScheduleTests[0]
+			v.cleanup()
+		})
+	})
 
-	// // provisioner match. But schedule does not match. Again,
-	// // VolumeReplication resource should not be created.
-	// var vrgSchedule2Tests []vrgTest
-	// vrgScheduleTest2Template := &template{
-	// 	ClaimBindInfo:          corev1.ClaimBound,
-	// 	VolumeBindInfo:         corev1.VolumeBound,
-	// 	schedulingInterval:     "22h",
-	// 	storageClassName:       "manual",
-	// 	replicationClassName:   "test-replicationclass",
-	// 	vrcProvisioner:         "manual.storage.com",
-	// 	scProvisioner:          "manual.storage.com",
-	// 	replicationClassLabels: map[string]string{"protection": "ramen"},
-	// }
-	// Context("schedule tests schedue does not match", func() {
-	// 	It("sets up non-bound PVCs, PVs and then bind them", func() {
-	// 		v := newVRGTestCaseBindInfo(4, vrgScheduleTest2Template, true, true)
-	// 		vrgSchedule2Tests = append(vrgSchedule2Tests, v)
-	// 	})
-	// 	It("expect no VR to be created as PVC not bound and check status", func() {
-	// 		v := vrgSchedule2Tests[0]
-	// 		v.waitForVRCountToMatch(0)
-	// 		// v.verifyVRGStatusExpectation(false)
-	// 	})
-	// 	It("waits for VRG to status to match", func() {
-	// 		v := vrgSchedule2Tests[0]
-	// 		v.verifyVRGStatusExpectation(false)
-	// 	})
-	// 	It("cleans up after testing", func() {
-	// 		v := vrgSchedule2Tests[0]
-	// 		v.cleanup()
-	// 	})
-	// })
+	// provisioner match. But schedule does not match. Again,
+	// VolumeReplication resource should not be created.
+	var vrgSchedule2Tests []vrgTest
+	vrgScheduleTest2Template := &template{
+		ClaimBindInfo:          corev1.ClaimBound,
+		VolumeBindInfo:         corev1.VolumeBound,
+		schedulingInterval:     "22h",
+		storageClassName:       "manual",
+		replicationClassName:   "test-replicationclass",
+		vrcProvisioner:         "manual.storage.com",
+		scProvisioner:          "manual.storage.com",
+		replicationClassLabels: map[string]string{"protection": "ramen"},
+	}
+	Context("schedule tests schedue does not match", func() {
+		It("sets up non-bound PVCs, PVs and then bind them", func() {
+			v := newVRGTestCaseBindInfo(4, vrgScheduleTest2Template, true, true)
+			vrgSchedule2Tests = append(vrgSchedule2Tests, v)
+		})
+		It("expect no VR to be created as PVC not bound and check status", func() {
+			v := vrgSchedule2Tests[0]
+			v.waitForVRCountToMatch(0)
+			// v.verifyVRGStatusExpectation(false)
+		})
+		It("waits for VRG to status to match", func() {
+			v := vrgSchedule2Tests[0]
+			v.verifyVRGStatusExpectation(false)
+		})
+		It("cleans up after testing", func() {
+			v := vrgSchedule2Tests[0]
+			v.cleanup()
+		})
+	})
 
-	// // provisioner and schedule match. But replicationClass
-	// // does not have the labels that VRG expects to find.
-	// var vrgSchedule3Tests []vrgTest
-	// vrgScheduleTest3Template := &template{
-	// 	ClaimBindInfo:          corev1.ClaimBound,
-	// 	VolumeBindInfo:         corev1.VolumeBound,
-	// 	schedulingInterval:     "1h",
-	// 	storageClassName:       "manual",
-	// 	replicationClassName:   "test-replicationclass",
-	// 	vrcProvisioner:         "manual.storage.com",
-	// 	scProvisioner:          "manual.storage.com",
-	// 	replicationClassLabels: map[string]string{},
-	// }
-	// Context("schedule tests replicationclass does not have labels", func() {
-	// 	It("sets up non-bound PVCs, PVs and then bind them", func() {
-	// 		v := newVRGTestCaseBindInfo(4, vrgScheduleTest3Template, true, true)
-	// 		vrgSchedule3Tests = append(vrgSchedule3Tests, v)
-	// 	})
-	// 	It("expect no VR to be created as VR not created and check status", func() {
-	// 		v := vrgSchedule3Tests[0]
-	// 		v.waitForVRCountToMatch(0)
-	// 		// v.verifyVRGStatusExpectation(false)
-	// 	})
-	// 	It("waits for VRG to status to match", func() {
-	// 		v := vrgSchedule3Tests[0]
-	// 		v.verifyVRGStatusExpectation(false)
-	// 	})
-	// 	It("cleans up after testing", func() {
-	// 		v := vrgSchedule3Tests[0]
-	// 		v.cleanup()
-	// 	})
-	// })
+	// provisioner and schedule match. But replicationClass
+	// does not have the labels that VRG expects to find.
+	var vrgSchedule3Tests []vrgTest
+	vrgScheduleTest3Template := &template{
+		ClaimBindInfo:          corev1.ClaimBound,
+		VolumeBindInfo:         corev1.VolumeBound,
+		schedulingInterval:     "1h",
+		storageClassName:       "manual",
+		replicationClassName:   "test-replicationclass",
+		vrcProvisioner:         "manual.storage.com",
+		scProvisioner:          "manual.storage.com",
+		replicationClassLabels: map[string]string{},
+	}
+	Context("schedule tests replicationclass does not have labels", func() {
+		It("sets up non-bound PVCs, PVs and then bind them", func() {
+			v := newVRGTestCaseBindInfo(4, vrgScheduleTest3Template, true, true)
+			vrgSchedule3Tests = append(vrgSchedule3Tests, v)
+		})
+		It("expect no VR to be created as VR not created and check status", func() {
+			v := vrgSchedule3Tests[0]
+			v.waitForVRCountToMatch(0)
+			// v.verifyVRGStatusExpectation(false)
+		})
+		It("waits for VRG to status to match", func() {
+			v := vrgSchedule3Tests[0]
+			v.verifyVRGStatusExpectation(false)
+		})
+		It("cleans up after testing", func() {
+			v := vrgSchedule3Tests[0]
+			v.cleanup()
+		})
+	})
 	// TODO: Add tests to move VRG to Secondary
 	// TODO: Add tests to ensure delete as Secondary (check if delete as Primary is tested above)
 	Specify("delete s3 profiles and secret", func() {
@@ -628,6 +628,9 @@ func (v *vrgTest) createVRG(pvcLabels map[string]string) {
 			},
 			Sync: ramendrv1alpha1.VRGSyncSpec{
 				Mode: ramendrv1alpha1.SyncModeDisabled,
+			},
+			VolSync: ramendrv1alpha1.VolSyncSpec{
+				Disabled: true,
 			},
 			S3Profiles: []string{"fakeS3Profile"},
 		},
