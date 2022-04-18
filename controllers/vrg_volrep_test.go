@@ -1068,6 +1068,7 @@ func waitForPVRestore() {
 	}
 
 	Expect(len(pvSet)).To(Equal(3))
+	
 	PVsToRestore = []string{}
 }
 
