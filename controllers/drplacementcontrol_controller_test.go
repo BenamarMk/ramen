@@ -35,7 +35,9 @@ import (
 
 	spokeClusterV1 "github.com/open-cluster-management/api/cluster/v1"
 	ocmworkv1 "github.com/open-cluster-management/api/work/v1"
+
 	dto "github.com/prometheus/client_model/go"
+	ramendrv1alpha1 "github.com/ramendr/ramen/api/v1alpha1"
 	rmn "github.com/ramendr/ramen/api/v1alpha1"
 	"github.com/ramendr/ramen/controllers"
 	rmnutil "github.com/ramendr/ramen/controllers/util"
@@ -53,6 +55,7 @@ const (
 	West1ManagedCluster   = "west1-cluster"
 	AsyncDRPolicyName     = "my-async-dr-peers"
 	SyncDRPolicyName      = "my-sync-dr-peers"
+	S3ProfileName         = "fakeS3Profile"
 
 	timeout       = time.Second * 10
 	interval      = time.Millisecond * 10
@@ -109,24 +112,6 @@ var (
 
 	schedulingInterval = "1h"
 
-	s3Secret = &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: "s3secret"},
-		StringData: map[string]string{
-			"AWS_ACCESS_KEY_ID":     awsAccessKeyIDSucc,
-			"AWS_SECRET_ACCESS_KEY": "",
-		},
-	}
-
-	s3Profiles = []rmn.S3StoreProfile{
-		{
-			S3ProfileName:        "fakeS3Profile",
-			S3Bucket:             bucketNameSucc,
-			S3CompatibleEndpoint: "http://192.168.39.223:30000",
-			S3Region:             "us-east-1",
-			S3SecretRef:          corev1.SecretReference{Name: s3Secret.Name},
-		},
-	}
-
 	asyncDRPolicy = &rmn.DRPolicy{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: AsyncDRPolicyName,
@@ -135,34 +120,13 @@ var (
 			DRClusterSet: []rmn.ManagedCluster{
 				{
 					Name:          East1ManagedCluster,
-					S3ProfileName: s3Profiles[0].S3ProfileName,
+					S3ProfileName: S3ProfileName,
 					Region:        "east",
 				},
 				{
 					Name:          West1ManagedCluster,
-					S3ProfileName: s3Profiles[0].S3ProfileName,
+					S3ProfileName: S3ProfileName,
 					Region:        "west",
-				},
-			},
-			SchedulingInterval: schedulingInterval,
-		},
-	}
-
-	syncDRPolicy = &rmn.DRPolicy{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: SyncDRPolicyName,
-		},
-		Spec: rmn.DRPolicySpec{
-			DRClusterSet: []rmn.ManagedCluster{
-				{
-					Name:          East1ManagedCluster,
-					S3ProfileName: s3Profiles[0].S3ProfileName,
-					Region:        "east",
-				},
-				{
-					Name:          East2ManagedCluster,
-					S3ProfileName: s3Profiles[0].S3ProfileName,
-					Region:        "east",
 				},
 			},
 			SchedulingInterval: schedulingInterval,
@@ -170,22 +134,83 @@ var (
 	}
 )
 
-func s3SecretNamespaceSet() {
-	s3Secret.Namespace = configMap.Namespace
-
-	for i := range s3Profiles {
-		s3Profiles[i].S3SecretRef.Namespace = s3Secret.Namespace
+func getSyncDRPolicy() *rmn.DRPolicy {
+	return &rmn.DRPolicy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: SyncDRPolicyName,
+		},
+		Spec: rmn.DRPolicySpec{
+			DRClusterSet: []rmn.ManagedCluster{
+				{
+					Name:          East1ManagedCluster,
+					S3ProfileName: S3ProfileName,
+					Region:        "east",
+				},
+				{
+					Name:          East2ManagedCluster,
+					S3ProfileName: S3ProfileName,
+					Region:        "east",
+				},
+			},
+			SchedulingInterval: schedulingInterval,
+		},
 	}
 }
 
-func s3SecretAndProfilesCreate() {
-	Expect(k8sClient.Create(context.TODO(), s3Secret)).To(Succeed())
-	s3ProfilesStore(s3Profiles)
+func newS3Secret(ns string) *corev1.Secret {
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "s3secret", Namespace: ns},
+		StringData: map[string]string{
+			"AWS_ACCESS_KEY_ID":     awsAccessKeyIDSucc,
+			"AWS_SECRET_ACCESS_KEY": "",
+		},
+	}
+
+	return secret
 }
 
-func s3SecretAndProfilesDelete() {
+func newS3Profiles() []rmn.S3StoreProfile {
+	return []rmn.S3StoreProfile{
+		{
+			S3ProfileName:        S3ProfileName,
+			S3Bucket:             bucketNameSucc,
+			S3CompatibleEndpoint: "http://192.168.39.223:30000",
+			S3Region:             "us-east-1",
+		},
+	}
+}
+
+func s3ProfilesSetup() {
+	s3profiles := newS3Profiles()
+	secret := newS3Secret(configMap.Namespace)
+	s3ProfilesSetSecretRef(s3profiles, secret)
+	Expect(k8sClient.Create(context.TODO(), secret)).To(Succeed())
+	s3ProfilesStore(s3profiles)
+}
+
+func s3ProfileSetSecretRef(s3profile *rmn.S3StoreProfile, secret *corev1.Secret) {
+	s3profile.S3SecretRef = corev1.SecretReference{
+		Name:      secret.Name,
+		Namespace: secret.Namespace,
+	}
+}
+
+func s3ProfilesSetSecretRef(s3p []rmn.S3StoreProfile, secret *corev1.Secret) {
+	for i := range s3p {
+		s3ProfileSetSecretRef(&s3p[i], secret)
+	}
+}
+
+func s3ProfilesDelete() {
+	s3s := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      ramenConfig.S3StoreProfiles[0].S3SecretRef.Name,
+			Namespace: ramenConfig.S3StoreProfiles[0].S3SecretRef.Namespace,
+		},
+	}
+
 	s3ProfilesStore([]rmn.S3StoreProfile{})
-	Expect(k8sClient.Delete(context.TODO(), s3Secret)).To(Succeed())
+	Expect(k8sClient.Delete(context.TODO(), s3s)).To(Succeed())
 }
 
 var drstate string
@@ -198,6 +223,12 @@ func FakeProgressCallback(drpcName string, state string) {
 var restorePVs = true
 
 type FakeMCVGetter struct{}
+
+func getNamespaceObj(namespaceName string) *corev1.Namespace {
+	return &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{Name: namespaceName},
+	}
+}
 
 //nolint:dogsled
 func getFunctionNameAtIndex(idx int) string {
@@ -223,7 +254,8 @@ func (f FakeMCVGetter) GetVRGFromManagedCluster(
 	conType := controllers.VRGConditionTypeDataReady
 	reason := controllers.VRGConditionReasonReplicating
 	vrgStatus := rmn.VolumeReplicationGroupStatus{
-		State: rmn.PrimaryState,
+		State:             rmn.PrimaryState,
+		FinalSyncComplete: true,
 		Conditions: []metav1.Condition{
 			{
 				Type:               conType,
@@ -231,6 +263,7 @@ func (f FakeMCVGetter) GetVRGFromManagedCluster(
 				Status:             metav1.ConditionTrue,
 				Message:            "Testing VRG",
 				LastTransitionTime: metav1.Now(),
+				ObservedGeneration: 1,
 			},
 		},
 	}
@@ -246,10 +279,12 @@ func (f FakeMCVGetter) GetVRGFromManagedCluster(
 			PVCSelector: metav1.LabelSelector{
 				MatchLabels: map[string]string{"appclass": "gold"},
 			},
-			S3Profiles: []string{s3Profiles[0].S3ProfileName},
+			S3Profiles: []string{S3ProfileName},
 		},
 		Status: vrgStatus,
 	}
+
+	vrg.Generation = 1
 
 	switch getFunctionNameAtIndex(2) {
 	case "updateDRPCStatus":
@@ -272,10 +307,51 @@ func (f FakeMCVGetter) GetVRGFromManagedCluster(
 		return nil, errors.NewNotFound(schema.GroupResource{}, "requested resource not found in ManagedCluster")
 
 	case "getVRGsFromManagedClusters":
-		return getVRGFromManifestWork(managedCluster)
+		vrgFromMW, err := getVRGFromManifestWork(managedCluster)
+		if err != nil {
+			return nil, err
+		}
+
+		if vrgFromMW != nil {
+			vrgFromMW.Generation = 1
+			vrgFromMW.Status = vrgStatus
+			vrgFromMW.Status.Conditions = append(vrgFromMW.Status.Conditions, metav1.Condition{
+				Type:               controllers.VRGConditionTypeClusterDataReady,
+				Reason:             controllers.VRGConditionReasonClusterDataRestored,
+				Status:             metav1.ConditionTrue,
+				Message:            "Cluster Data Ready",
+				LastTransitionTime: metav1.Now(),
+				ObservedGeneration: vrgFromMW.Generation,
+			})
+			vrgFromMW.Status.Conditions = append(vrgFromMW.Status.Conditions, metav1.Condition{
+				Type:               controllers.VRGConditionTypeClusterDataProtected,
+				Reason:             controllers.VRGConditionReasonClusterDataRestored,
+				Status:             metav1.ConditionTrue,
+				Message:            "Cluster Data Protected",
+				LastTransitionTime: metav1.Now(),
+				ObservedGeneration: vrgFromMW.Generation,
+			})
+			vrgFromMW.Status.Conditions = append(vrgFromMW.Status.Conditions, metav1.Condition{
+				Type:               controllers.VRGConditionTypeDataProtected,
+				Reason:             controllers.VRGConditionReasonDataProtected,
+				Status:             metav1.ConditionTrue,
+				Message:            "Data Protected",
+				LastTransitionTime: metav1.Now(),
+				ObservedGeneration: vrgFromMW.Generation,
+			})
+
+			newProtectedPVC := &ramendrv1alpha1.ProtectedPVC{
+				Name: "random name",
+			}
+
+			vrgFromMW.Status.ProtectedPVCs = append(vrgFromMW.Status.ProtectedPVCs, *newProtectedPVC)
+
+		}
+
+		return vrgFromMW, nil
 	}
 
-	return nil, fmt.Errorf("unknonw caller %s", getFunctionNameAtIndex(2))
+	return nil, fmt.Errorf("unknown caller %s", getFunctionNameAtIndex(2))
 }
 
 func getVRGFromManifestWork(managedCluster string) (*rmn.VolumeReplicationGroup, error) {
@@ -296,6 +372,9 @@ func getVRGFromManifestWork(managedCluster string) (*rmn.VolumeReplicationGroup,
 	err = yaml.Unmarshal(mw.Spec.Workload.Manifests[0].Raw, vrg)
 	Expect(err).NotTo(HaveOccurred())
 
+	// Fake generation:
+	vrg.Generation = 1
+
 	// Always report conditions as a success?
 	vrg.Status.Conditions = append(vrg.Status.Conditions, metav1.Condition{
 		Type:               controllers.VRGConditionTypeClusterDataProtected,
@@ -310,7 +389,16 @@ func getVRGFromManifestWork(managedCluster string) (*rmn.VolumeReplicationGroup,
 		Type:               controllers.VRGConditionTypeDataReady,
 		Reason:             controllers.VRGConditionReasonReplicating,
 		Status:             metav1.ConditionTrue,
-		Message:            "Testing VRG",
+		Message:            "Data Read",
+		LastTransitionTime: metav1.Now(),
+		ObservedGeneration: vrg.Generation,
+	})
+
+	vrg.Status.Conditions = append(vrg.Status.Conditions, metav1.Condition{
+		Type:               controllers.VRGConditionTypeClusterDataReady,
+		Reason:             controllers.VRGConditionReasonClusterDataRestored,
+		Status:             metav1.ConditionTrue,
+		Message:            "Cluster Data Protected",
 		LastTransitionTime: metav1.Now(),
 		ObservedGeneration: vrg.Generation,
 	})
@@ -473,7 +561,7 @@ func createNamespace(ns *corev1.Namespace) {
 	}
 }
 
-func createNamespacesAsync() {
+func createNamespacesAsync(appNamespace *corev1.Namespace) {
 	createNamespace(east1ManagedClusterNamespace)
 	createNamespace(west1ManagedClusterNamespace)
 	createNamespace(appNamespace)
@@ -509,21 +597,16 @@ func moveVRGToSecondary(clusterNamespace, mwType string, protectData bool) (*rmn
 		Namespace: clusterNamespace,
 	}
 
-	vrg, err := updateVRGMW(manifestLookupKey, protectData)
-	if err != nil {
-		if errors.IsNotFound(err) {
-			return nil, err
-		}
+	var vrg *rmn.VolumeReplicationGroup
 
-		// If the resource is changed when MW is being
-		// updated, then it can fail. Try again.
+	var err error
+
+	Eventually(func() bool {
 		vrg, err = updateVRGMW(manifestLookupKey, protectData)
-		if err != nil && errors.IsNotFound(err) {
-			return nil, err
-		}
-	}
 
-	Expect(err).NotTo(HaveOccurred(), "erros %w in updating MW", err)
+		return err == nil || errors.IsNotFound(err)
+	}, timeout, interval).Should(BeTrue(),
+		fmt.Sprintf("failed to wait for manifestwork update %s cluster %s", mwType, clusterNamespace))
 
 	return vrg, err
 }
@@ -558,7 +641,6 @@ func updateVRGMW(manifestLookupKey types.NamespacedName, dataProtected bool) (*r
 		mw.Spec.Workload.Manifests[0] = *manifest
 
 		err = k8sClient.Update(context.TODO(), mw)
-		// Expect(err).NotTo(HaveOccurred(), "erros %w in updating MW", err)
 		if err != nil {
 			return nil, fmt.Errorf("failed to update VRG ManifestWork %w", err)
 		}
@@ -659,7 +741,7 @@ func waitForVRGMWDeletion(clusterNamespace string) {
 
 func InitialDeploymentAsync(namespace, placementName, homeCluster string) (*plrv1.PlacementRule,
 	*rmn.DRPlacementControl) {
-	createNamespacesAsync()
+	createNamespacesAsync(getNamespaceObj(DRPCNamespaceName))
 
 	createManagedClustersAsync()
 	createDRPolicyAsync()
@@ -816,7 +898,7 @@ func waitForCompletion(expectedState string) {
 	Eventually(func() bool {
 		return drstate == expectedState
 	}, timeout*2, interval).Should(BeTrue(),
-		fmt.Sprintf("failed to waiting for state to match. expecting: %s, found %s", expectedState, drstate))
+		fmt.Sprintf("failed waiting for state to match. expecting: %s, found %s", expectedState, drstate))
 }
 
 func waitForUpdateDRPCStatus() {
@@ -948,7 +1030,7 @@ func relocateToPreferredCluster(userPlacementRule *plrv1.PlacementRule, fromClus
 	verifyDRPCStatusPreferredClusterExpectation(rmn.Relocated)
 	verifyVRGManifestWorkCreatedAsPrimary(toCluster1)
 
-	waitForVRGMWDeletion(fromCluster)
+	waitForVRGMWDeletion(West1ManagedCluster)
 
 	waitForCompletion(string(rmn.Relocated))
 }
@@ -1002,12 +1084,12 @@ func createManagedClustersSync() {
 }
 
 func createDRPolicySync() {
-	err := k8sClient.Create(context.TODO(), syncDRPolicy)
+	err := k8sClient.Create(context.TODO(), getSyncDRPolicy())
 	Expect(err).NotTo(HaveOccurred())
 }
 
 func deleteDRPolicySync() {
-	Expect(k8sClient.Delete(context.TODO(), syncDRPolicy)).To(Succeed())
+	Expect(k8sClient.Delete(context.TODO(), getSyncDRPolicy())).To(Succeed())
 }
 
 func getLatestSyncDRPolicy() *rmn.DRPolicy {
@@ -1128,8 +1210,7 @@ func verifyFailoverToSecondary(userPlacementRule *plrv1.PlacementRule, fromClust
 // +kubebuilder:docs-gen:collapse=Imports
 var _ = Describe("DRPlacementControl Reconciler", func() {
 	Specify("s3 profiles and secret", func() {
-		s3SecretNamespaceSet()
-		s3SecretAndProfilesCreate()
+		s3ProfilesSetup()
 	})
 	Context("DRPlacementControl Reconciler Async DR", func() {
 		userPlacementRule := &plrv1.PlacementRule{}
@@ -1330,7 +1411,7 @@ var _ = Describe("DRPlacementControl Reconciler", func() {
 			})
 		})
 	})
-	Specify("s3 profiles and secret delete", func() {
-		s3SecretAndProfilesDelete()
+	Specify("delete s3 profiles and secret", func() {
+		s3ProfilesDelete()
 	})
 })

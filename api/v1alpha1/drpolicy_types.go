@@ -79,6 +79,12 @@ type DRPolicySpec struct {
 	//+optional
 	ReplicationClassSelector metav1.LabelSelector `json:"replicationClassSelector,omitempty"`
 
+	// Label selector to identify all the VolumeSnapshotClasses.
+	// This selector is assumed to be the same for all subscriptions that
+	// need DR protection. It will be passed in to the VRG when it is created
+	//+optional
+	VolumeSnapshotClassSelector metav1.LabelSelector `json:"volumeSnapshotClassSelector,omitempty"`
+
 	// The set of managed clusters governed by this policy, which have
 	// replication relationship enabled between them.
 	DRClusterSet []ManagedCluster `json:"drClusterSet"`

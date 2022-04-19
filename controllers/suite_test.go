@@ -41,7 +41,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 
+	volsyncv1alpha1 "github.com/backube/volsync/api/v1alpha1"
 	volrep "github.com/csi-addons/volume-replication-operator/api/v1alpha1"
+	snapv1 "github.com/kubernetes-csi/external-snapshotter/client/v4/apis/volumesnapshot/v1"
 	ocmclv1 "github.com/open-cluster-management/api/cluster/v1"
 	ocmworkv1 "github.com/open-cluster-management/api/work/v1"
 	ramendrv1alpha1 "github.com/ramendr/ramen/api/v1alpha1"
@@ -143,6 +145,12 @@ var _ = BeforeSuite(func() {
 	err = volrep.AddToScheme(scheme.Scheme)
 	Expect(err).NotTo(HaveOccurred())
 
+	err = volsyncv1alpha1.AddToScheme(scheme.Scheme)
+	Expect(err).NotTo(HaveOccurred())
+
+	err = snapv1.AddToScheme(scheme.Scheme)
+	Expect(err).NotTo(HaveOccurred())
+
 	// +kubebuilder:scaffold:scheme
 
 	k8sClient, err = client.New(cfg, client.Options{Scheme: scheme.Scheme})
@@ -189,7 +197,7 @@ var _ = BeforeSuite(func() {
 		Client:         k8sManager.GetClient(),
 		APIReader:      k8sManager.GetAPIReader(),
 		Log:            ctrl.Log.WithName("controllers").WithName("VolumeReplicationGroup"),
-		ObjStoreGetter: ramencontrollers.S3ObjectStoreGetter(),
+		ObjStoreGetter: fakeObjectStoreGetter{},
 		PVDownloader:   FakePVDownloader{},
 		PVUploader:     FakePVUploader{},
 		PVDeleter:      FakePVDeleter{},

@@ -32,6 +32,9 @@ type Empty struct{}
 var UploadedPVs = map[string]Empty{}
 
 var _ = Describe("Test VolumeReplicationGroup", func() {
+	Specify("s3 profiles and secret", func() {
+		s3ProfilesSetup()
+	})
 	// Test first restore
 	Context("restore test case", func() {
 		It("sets vrg for restore", func() {
@@ -352,6 +355,9 @@ var _ = Describe("Test VolumeReplicationGroup", func() {
 	})
 	// TODO: Add tests to move VRG to Secondary
 	// TODO: Add tests to ensure delete as Secondary (check if delete as Primary is tested above)
+	Specify("delete s3 profiles and secret", func() {
+		s3ProfilesDelete()
+	})
 })
 
 type vrgTest struct {
@@ -623,6 +629,9 @@ func (v *vrgTest) createVRG(pvcLabels map[string]string) {
 			Sync: ramendrv1alpha1.VRGSyncSpec{
 				Mode: ramendrv1alpha1.SyncModeDisabled,
 			},
+			VolSync: ramendrv1alpha1.VolSyncSpec{
+				Disabled: true,
+			},
 			S3Profiles: []string{"fakeS3Profile"},
 		},
 	}
@@ -750,6 +759,16 @@ func (v *vrgTest) getVRG(vrgName string) *ramendrv1alpha1.VolumeReplicationGroup
 	return vrg
 }
 
+func (v *vrgTest) isAnyPVCProtectedByVolSync(vrg *ramendrv1alpha1.VolumeReplicationGroup) bool {
+	for _, protectedPVC := range vrg.Status.ProtectedPVCs {
+		if protectedPVC.ProtectedByVolSync {
+			return true
+		}
+	}
+
+	return false
+}
+
 func (v *vrgTest) verifyVRGStatusExpectation(expectedStatus bool) {
 	Eventually(func() bool {
 		vrg := v.getVRG(v.vrgName)
@@ -767,6 +786,10 @@ func (v *vrgTest) verifyVRGStatusExpectation(expectedStatus bool) {
 				return dataReadyCondition.Status == metav1.ConditionTrue && dataReadyCondition.Reason ==
 					vrgController.VRGConditionReasonReplicating
 			}
+		}
+
+		if v.isAnyPVCProtectedByVolSync(vrg) {
+			return true
 		}
 
 		return dataReadyCondition.Status != metav1.ConditionTrue
@@ -1045,6 +1068,8 @@ func waitForPVRestore() {
 	}
 
 	Expect(len(pvSet)).To(Equal(3))
+	
+	PVsToRestore = []string{}
 }
 
 type FakePVDownloader struct{}
