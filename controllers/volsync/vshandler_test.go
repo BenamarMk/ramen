@@ -922,6 +922,12 @@ var _ = Describe("VolSync Handler", func() {
 						// will be the controller owning it
 						return ownerMatches(latestImageSnap, owner.GetName(), "ConfigMap", false /* not controller */)
 					}, maxWait, interval).Should(BeTrue())
+
+					// The volumesnapshot should also have the volsync do-not-delete label added
+					snapLabels := latestImageSnap.GetLabels()
+					val, ok := snapLabels["volsync.backube/do-not-delete"]
+					Expect(ok).To(BeTrue())
+					Expect(val).To(Equal("true"))
 				})
 
 				//TODO:
@@ -1321,6 +1327,12 @@ var _ = Describe("VolSync Handler", func() {
 					// configmap owner is faking out VRG
 					return ownerMatches(testPVC, owner.GetName(), "ConfigMap", false)
 				}, maxWait, interval).Should(BeTrue())
+
+				// do-not-delete label should be added to the PVC
+				pvcLabels := testPVC.GetLabels()
+				val, ok := pvcLabels["do-not-delete"]
+				Expect(ok).To(BeTrue())
+				Expect(val).To(Equal("true"))
 			})
 
 			Context("When the pvc reconcile-option annotation does not exist", func() {
@@ -1465,6 +1477,9 @@ func createDummyPVC(pvcName, namespace string, capacity resource.Quantity,
 			Name:        pvcName,
 			Namespace:   namespace,
 			Annotations: annotations,
+			Labels: map[string]string{
+				"testlabel1": "testlabelvalue",
+			},
 		},
 		Spec: corev1.PersistentVolumeClaimSpec{
 			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
