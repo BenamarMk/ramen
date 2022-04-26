@@ -334,6 +334,7 @@ rules:
   verbs:
   - get
   - update
+  - watch
 - apiGroups:
   - policy.open-cluster-management.io
   resources:
