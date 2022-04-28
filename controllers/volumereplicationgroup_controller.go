@@ -958,8 +958,8 @@ func (v *VRGInstance) updateVRGDataReadyCondition() {
 	volSyncAggregatedCond := v.aggregateVolSyncDataReadyCondition()
 	if volSyncAggregatedCond != nil {
 		setStatusCondition(&v.instance.Status.Conditions, *volSyncAggregatedCond)
-	} 
-	
+	}
+
 	// otherwise, use the condition result of the PVCs targeted for VolRep
 	if len(v.volRepPVCs) != 0 {
 		v.aggregateVolRepDataReadyCondition()
@@ -970,8 +970,8 @@ func (v *VRGInstance) updateVRGDataProtectedCondition() {
 	volSyncAggregatedCond := v.aggregateVolSyncDataProtectedCondition()
 	if volSyncAggregatedCond != nil {
 		setStatusCondition(&v.instance.Status.Conditions, *volSyncAggregatedCond)
-	} 
-	
+	}
+
 	// otherwise, use the condition result of the PVCs targeted for VolRep
 	if len(v.volRepPVCs) != 0 {
 		v.aggregateVolRepDataProtectedCondition()
@@ -999,8 +999,8 @@ func (v *VRGInstance) updateVRGClusterDataProtectedCondition() {
 	volSyncAggregatedCond := v.aggregateVolSyncClusterDataProtectedCondition()
 	if volSyncAggregatedCond != nil {
 		setStatusCondition(&v.instance.Status.Conditions, *volSyncAggregatedCond)
-	} 
-	
+	}
+
 	if len(v.volRepPVCs) != 0 {
 		v.aggregateVolRepClusterDataProtectedCondition()
 	}

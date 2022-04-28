@@ -569,9 +569,9 @@ func (r *DRPlacementControlReconciler) createDRPCInstance(ctx context.Context,
 
 	d := &DRPCInstance{
 		reconciler: r, ctx: ctx, log: r.Log, instance: drpc, needStatusUpdate: false,
-		userPlacementRule: usrPlRule, drpcPlacementRule: drpcPlRule, drPolicy: drPolicy, vrgs: vrgs,
-		mwu: rmnutil.MWUtil{Client: r.Client, Ctx: ctx, Log: r.Log, InstName: drpc.Name,
-			InstNamespace: drpc.Namespace}, volSyncDisabled: ramenConfig.VolSync.Disabled,
+		userPlacementRule: usrPlRule, drpcPlacementRule: drpcPlRule, drPolicy: drPolicy,
+		vrgs: vrgs, volSyncDisabled: ramenConfig.VolSync.Disabled,
+		mwu: rmnutil.MWUtil{Client: r.Client, Ctx: ctx, Log: r.Log, InstName: drpc.Name, InstNamespace: drpc.Namespace},
 	}
 
 	r.Log.Info(fmt.Sprintf("PlacementRule Status is: (%+v)", usrPlRule.Status))
