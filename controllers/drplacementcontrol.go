@@ -57,6 +57,7 @@ type DRPCInstance struct {
 	vrgs                 map[string]*rmn.VolumeReplicationGroup
 	mwu                  rmnutil.MWUtil
 	metricsTimer         timerInstance
+	volSyncDisabled      bool
 }
 
 func (d *DRPCInstance) startProcessing() bool {
@@ -331,14 +332,19 @@ func (d *DRPCInstance) RunFailover() (bool, error) {
 		ready := d.checkReadinessAfterFailover(d.instance.Spec.FailoverCluster)
 		if !ready {
 			d.log.Info("VRGCondition not ready to finish failover")
+			d.instance.Status.Progression = "WaitingForRediness"
 
 			return !done, nil
 		}
+
+		d.instance.Status.Progression = "Cleaning up"
 
 		err := d.ensureCleanupAndVolSyncReplicationSetup(d.instance.Spec.FailoverCluster)
 		if err != nil {
 			return !done, err
 		}
+
+		d.instance.Status.Progression = ""
 
 		return done, nil
 	}
@@ -477,10 +483,14 @@ func (d *DRPCInstance) RunRelocate() (bool, error) {
 		d.setDRPCCondition(&d.instance.Status.Conditions, rmn.ConditionAvailable, d.instance.Generation,
 			metav1.ConditionTrue, string(d.instance.Status.Phase), "Completed")
 
+		d.instance.Status.Progression = "Cleaning up"
+
 		err = d.ensureCleanupAndVolSyncReplicationSetup(preferredCluster)
 		if err != nil {
 			return !done, err
 		}
+
+		d.instance.Status.Progression = ""
 
 		return done, nil
 	}
@@ -516,7 +526,7 @@ func (d *DRPCInstance) RunRelocate() (bool, error) {
 func (d *DRPCInstance) ensureCleanupAndVolSyncReplicationSetup(targetCluster string) error {
 	// If we have VolSync replication, this is the perfect time to reset the RDSpec
 	// on the primary. This will cause the RD to be cleared on the primary
-	err := d.resetVolSyncRDOnPrimary(targetCluster)
+	err := d.ResetVolSyncRDOnPrimary(targetCluster)
 	if err != nil {
 		return err
 	}
@@ -547,11 +557,13 @@ func (d *DRPCInstance) quiesceAndRunFinalSync(homeCluster string) (bool, error) 
 	}
 
 	if !result {
+		d.instance.Status.Progression = "PreparingFinalSync"
 		return !done, nil
 	}
 
 	if len(d.userPlacementRule.Status.Decisions) != 0 {
 		// clear current user PlacementRule's decision
+		d.instance.Status.Progression = "ClearingPlRule"
 		err := d.clearUserPlacementRuleStatus()
 		if err != nil {
 			return !done, err
@@ -565,9 +577,11 @@ func (d *DRPCInstance) quiesceAndRunFinalSync(homeCluster string) (bool, error) 
 	}
 
 	if !result {
+		d.instance.Status.Progression = "RunningFinalSync"
 		return !done, nil
 	}
 
+	d.instance.Status.Progression = "FinalSyncComplete"
 	return done, nil
 }
 
@@ -725,11 +739,6 @@ func (d *DRPCInstance) checkReadinessAfterFailover(homeCluster string) bool {
 		d.isVRGConditionReady(homeCluster, VRGConditionTypeClusterDataReady)
 }
 
-func (d *DRPCInstance) checkReadinessAfterRelocate(homeCluster string) bool {
-	return d.isVRGConditionReady(homeCluster, VRGConditionTypeDataProtected) &&
-		d.isVRGConditionReady(homeCluster, VRGConditionTypeClusterDataProtected)
-}
-
 func (d *DRPCInstance) isVRGConditionReady(homeCluster string, conditionType string) bool {
 	const ready = true
 
@@ -815,6 +824,7 @@ func (d *DRPCInstance) setupRelocation(preferredCluster string) error {
 	// complete in one shot, then coming back to this loop will reset the preferredCluster to secondary again.
 	clusterToSkip := preferredCluster
 	if !d.ensureVRGIsSecondaryEverywhere(clusterToSkip) {
+		d.instance.Status.Progression = "MovingToSecondary"
 		// During relocation, both clusters should be up and both must be secondaries before we proceed.
 		if !d.moveVRGToSecondaryEverywhere() {
 			return fmt.Errorf("failed to move VRG to secondary everywhere")
@@ -857,6 +867,8 @@ func (d *DRPCInstance) switchToCluster(targetCluster, targetClusterNamespace str
 		d.log.Info(fmt.Sprintf("PVs Restored? %v", restored))
 
 		if !restored {
+			d.instance.Status.Progression = "WaitingForPVRestore"
+
 			return fmt.Errorf("%w)", WaitForPVRestoreToComplete)
 		}
 	}
@@ -865,6 +877,8 @@ func (d *DRPCInstance) switchToCluster(targetCluster, targetClusterNamespace str
 	if err != nil {
 		return err
 	}
+
+	d.instance.Status.Progression = "UpdatedPlRule"
 
 	return nil
 }
@@ -1080,7 +1094,8 @@ func (d *DRPCInstance) createVRGManifestWork(homeCluster string) error {
 	d.log.Info("Creating VRG ManifestWork",
 		"Last State:", d.getLastDRState(), "cluster", homeCluster)
 
-	vrg := d.generateVRG()
+	vrg := d.generateVRG(rmn.Primary)
+	vrg.Spec.VolSync.Disabled = d.volSyncDisabled
 
 	if err := d.mwu.CreateOrUpdateVRGManifestWork(
 		d.instance.Name, d.instance.Namespace,
@@ -1093,13 +1108,13 @@ func (d *DRPCInstance) createVRGManifestWork(homeCluster string) error {
 	return nil
 }
 
-func (d *DRPCInstance) generateVRG() rmn.VolumeReplicationGroup {
+func (d *DRPCInstance) generateVRG(repState rmn.ReplicationState) rmn.VolumeReplicationGroup {
 	vrg := rmn.VolumeReplicationGroup{
 		TypeMeta:   metav1.TypeMeta{Kind: "VolumeReplicationGroup", APIVersion: "ramendr.openshift.io/v1alpha1"},
 		ObjectMeta: metav1.ObjectMeta{Name: d.instance.Name, Namespace: d.instance.Namespace},
 		Spec: rmn.VolumeReplicationGroupSpec{
 			PVCSelector:      d.instance.Spec.PVCSelector,
-			ReplicationState: rmn.Primary,
+			ReplicationState: repState,
 			S3Profiles:       rmnutil.S3UploadProfileList(*d.drPolicy),
 		},
 	}
@@ -1264,7 +1279,7 @@ func (d *DRPCInstance) EnsureCleanup(clusterToSkip string) error {
 
 	// IFF we have VolSync PVCs, then no need to clean up
 	homeCluster := clusterToSkip
-	repReq, err := d.isVolSyncReplicationRequired(homeCluster)
+	repReq, err := d.IsVolSyncReplicationRequired(homeCluster)
 
 	if err != nil {
 		return fmt.Errorf("failed to check if VolSync replication is required (%w)", err)
