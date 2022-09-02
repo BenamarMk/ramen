@@ -80,7 +80,8 @@ var _ = Describe("VolSync Handler - StorageClass/VolumeSnapshotClass tests", fun
 
 			BeforeEach(func() {
 				vsHandler = volsync.NewVSHandler(ctx, k8sClient, logger, nil,
-					schedulingInterval, metav1.LabelSelector{})
+					schedulingInterval, metav1.LabelSelector{},
+					"none")
 			})
 
 			It("GetVolumeSnapshotClasses() should find all volume snapshot classes", func() {
@@ -110,7 +111,8 @@ var _ = Describe("VolSync Handler - StorageClass/VolumeSnapshotClass tests", fun
 				}
 
 				vsHandler = volsync.NewVSHandler(ctx, k8sClient, logger, nil,
-					schedulingInterval, vsClassLabelSelector)
+					schedulingInterval, vsClassLabelSelector,
+					"none")
 			})
 
 			It("GetVolumeSnapshotClasses() should find matching volume snapshot classes", func() {
@@ -154,7 +156,8 @@ var _ = Describe("VolSync Handler - StorageClass/VolumeSnapshotClass tests", fun
 				}
 
 				vsHandler = volsync.NewVSHandler(ctx, k8sClient, logger, nil,
-					schedulingInterval, vsClassLabelSelector)
+					schedulingInterval, vsClassLabelSelector,
+					"none")
 			})
 
 			It("GetVolumeSnapshotClasses() should find matching volume snapshot classes", func() {
@@ -211,7 +214,8 @@ var _ = Describe("VolSync Handler - StorageClass/VolumeSnapshotClass tests", fun
 
 			// Initialize a vshandler
 			vsHandler = volsync.NewVSHandler(ctx, k8sClient, logger, nil,
-				schedulingInterval, metav1.LabelSelector{})
+				schedulingInterval, metav1.LabelSelector{},
+				"openshift-storage.cephfs.csi.ceph.com")
 		})
 
 		JustBeforeEach(func() {
@@ -423,12 +427,13 @@ var _ = Describe("VolSync Handler", func() {
 		Expect(ownerCm.GetName()).NotTo(BeEmpty())
 		owner = ownerCm
 
-		vsHandler = volsync.NewVSHandler(ctx, k8sClient, logger, owner, schedulingInterval, metav1.LabelSelector{})
+		vsHandler = volsync.NewVSHandler(ctx, k8sClient, logger, owner, schedulingInterval, metav1.LabelSelector{}, "none")
 	})
 
 	AfterEach(func() {
 		// All resources are namespaced, so this should clean it all up
-		Expect(k8sClient.Delete(ctx, testNamespace)).To(Succeed())
+		Expect(k8sClient.Delete(ctx, testNamespace)).To(Succeed(),
+		"none")
 	})
 
 	Describe("Reconcile ReplicationDestination", func() {
@@ -1395,7 +1400,7 @@ var _ = Describe("VolSync Handler", func() {
 			Expect(k8sClient.Create(ctx, otherOwnerCm)).To(Succeed())
 			Expect(otherOwnerCm.GetName()).NotTo(BeEmpty())
 			otherVSHandler := volsync.NewVSHandler(ctx, k8sClient, logger, otherOwnerCm,
-				schedulingInterval, metav1.LabelSelector{})
+				schedulingInterval, metav1.LabelSelector{}, "none")
 
 			for i := 0; i < 2; i++ {
 				otherOwnerRdSpec := ramendrv1alpha1.VolSyncReplicationDestinationSpec{
@@ -1585,7 +1590,7 @@ var _ = Describe("VolSync Handler", func() {
 			Expect(k8sClient.Create(ctx, otherOwnerCm)).To(Succeed())
 			Expect(otherOwnerCm.GetName()).NotTo(BeEmpty())
 			otherVSHandler := volsync.NewVSHandler(ctx, k8sClient, logger, otherOwnerCm,
-				schedulingInterval, metav1.LabelSelector{})
+				schedulingInterval, metav1.LabelSelector{}, "none")
 
 			for i := 0; i < 2; i++ {
 				otherOwnerRsSpec := ramendrv1alpha1.VolSyncReplicationSourceSpec{

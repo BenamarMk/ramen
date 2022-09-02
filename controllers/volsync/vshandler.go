@@ -77,10 +77,12 @@ type VSHandler struct {
 	schedulingInterval          string
 	volumeSnapshotClassSelector metav1.LabelSelector // volume snapshot classes to be filtered label selector
 	volumeSnapshotClassList     *snapv1.VolumeSnapshotClassList
+	defaultCephFSCSIDriverName  string
 }
 
 func NewVSHandler(ctx context.Context, client client.Client, log logr.Logger, owner metav1.Object,
-	schedulingInterval string, volumeSnapshotClassSelector metav1.LabelSelector) *VSHandler {
+	schedulingInterval string, volumeSnapshotClassSelector metav1.LabelSelector,
+	defaultCephFSCSIDriverName string) *VSHandler {
 	return &VSHandler{
 		ctx:                         ctx,
 		client:                      client,
@@ -89,6 +91,7 @@ func NewVSHandler(ctx context.Context, client client.Client, log logr.Logger, ow
 		schedulingInterval:          schedulingInterval,
 		volumeSnapshotClassSelector: volumeSnapshotClassSelector,
 		volumeSnapshotClassList:     nil, // Do not initialize until we need it
+		defaultCephFSCSIDriverName:  defaultCephFSCSIDriverName,
 	}
 }
 
@@ -1185,7 +1188,7 @@ func (v *VSHandler) getRsyncServiceType() *corev1.ServiceType {
 // above.
 func (v *VSHandler) ModifyRSSpecForCephFS(rsSpec *ramendrv1alpha1.VolSyncReplicationSourceSpec,
 	storageClass *storagev1.StorageClass) error {
-	if storageClass.Provisioner != "openshift-storage.cephfs.csi.ceph.com" { // TODO: confirm this is correct
+	if storageClass.Provisioner != v.defaultCephFSCSIDriverName {
 		return nil // No workaround required
 	}
 
