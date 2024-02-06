@@ -1789,8 +1789,8 @@ func (v *VRGInstance) s3KeyPrefix() string {
 	return S3KeyPrefix(v.namespacedName)
 }
 
-func (v *VRGInstance) clusterDataRestoreForVolRep(result *ctrl.Result) error {
-	v.log.Info("Restoring VolRep PVs and PVCs")
+func (v *VRGInstance) restorePVsAndPVCsForVolRep(result *ctrl.Result) error {
+	v.log.Info("Restoring PVs and PVCs for VolRep")
 
 	if len(v.instance.Spec.S3Profiles) == 0 {
 		v.log.Info("No S3 profiles configured")

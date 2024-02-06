@@ -14,8 +14,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-func (v *VRGInstance) restorePVsForVolSync() error {
-	v.log.Info("VolSync: Restoring VolSync PVs")
+func (v *VRGInstance) restorePVsAndPVCsForVolSync() error {
+	v.log.Info("Restoring PVs and PVCs for VolSync")
 
 	if len(v.instance.Spec.VolSync.RDSpec) == 0 {
 		v.log.Info("No RDSpec entries. There are no PVCs to restore")
