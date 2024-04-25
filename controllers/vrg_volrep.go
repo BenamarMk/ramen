@@ -1926,7 +1926,7 @@ func (v *VRGInstance) restorePVsFromObjectStore(objectStore ObjectStorer, s3Prof
 		return 0, fmt.Errorf("%s: %w", errMsg, err)
 	}
 
-	return restoreClusterDataObjects(v, pvList, "PV", cleanupPVForRestore, v.validateExistingPV)
+	return restoreClusterDataObjects(v, pvList, "PV", preparePVForReclaim, v.validateExistingPV)
 }
 
 func (v *VRGInstance) restorePVCsFromObjectStore(objectStore ObjectStorer, s3ProfileName string) (int, error) {
@@ -1993,7 +1993,7 @@ func restoreClusterDataObjects[
 ](
 	v *VRGInstance,
 	objList []ObjectType, objType string,
-	cleanupForRestore func(*ObjectType),
+	preparePVForReclaim func(*ObjectType),
 	validateExistingObject func(*ObjectType) error,
 ) (int, error) {
 	numRestored := 0
@@ -2003,7 +2003,7 @@ func restoreClusterDataObjects[
 		objectCopy := &*object
 		obj := ClientObject(objectCopy)
 
-		cleanupForRestore(objectCopy)
+		preparePVForReclaim(objectCopy)
 		addRestoreAnnotation(obj)
 
 		if err := v.reconciler.Create(v.ctx, obj); err != nil {
@@ -2043,7 +2043,7 @@ func (v *VRGInstance) updateExistingPVForSync(pv *corev1.PersistentVolume) error
 	// failover/relocate process. Hence, the restore may not be
 	// required and the annotation for restore can be missing for
 	// the sync mode.
-	cleanupPVForRestore(pv)
+	preparePVForReclaim(pv)
 	addRestoreAnnotation(pv)
 
 	if err := v.reconciler.Update(v.ctx, pv); err != nil {
@@ -2201,9 +2201,9 @@ func addRestoreAnnotation(obj client.Object) {
 	obj.GetAnnotations()[RestoreAnnotation] = RestoredByRamen
 }
 
-// cleanupForRestore cleans up required PV or PVC fields, to ensure restore succeeds
+// preparePVForReclaim cleans up required PV or PVC fields, to ensure restore succeeds
 // to a new cluster, and rebinding the PVC to an existing PV with the same claimRef
-func cleanupPVForRestore(pv *corev1.PersistentVolume) {
+func preparePVForReclaim(pv *corev1.PersistentVolume) {
 	pv.ResourceVersion = ""
 	if pv.Spec.ClaimRef != nil {
 		pv.Spec.ClaimRef.UID = ""

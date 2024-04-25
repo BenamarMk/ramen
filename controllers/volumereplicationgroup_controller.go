@@ -474,6 +474,7 @@ const (
 	// Finalizers
 	vrgFinalizerName        = "volumereplicationgroups.ramendr.openshift.io/vrg-protection"
 	PvcVRFinalizerProtected = "volumereplicationgroups.ramendr.openshift.io/pvc-vr-protection"
+	PvcVSFinalizerProtected = "volumereplicationgroups.ramendr.openshift.io/pvc-vs-protection"
 	pvcInUse                = "kubernetes.io/pvc-protection"
 
 	// Annotations

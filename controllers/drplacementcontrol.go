@@ -812,7 +812,7 @@ func (d *DRPCInstance) RunRelocate() (bool, error) {
 	}
 
 	if curHomeCluster != "" && curHomeCluster != preferredCluster {
-		result, err := d.quiesceAndRunFinalSync(curHomeCluster)
+		result, err := d.ensurequiescing(curHomeCluster, rmn.Relocating)
 		if err != nil {
 			return !done, err
 		}
@@ -884,23 +884,15 @@ func (d *DRPCInstance) ensureCleanupAndVolSyncReplicationSetup(srcCluster string
 	return nil
 }
 
-func (d *DRPCInstance) quiesceAndRunFinalSync(homeCluster string) (bool, error) {
+func (d *DRPCInstance) ensurequiescing(homeCluster string, drState rmn.DRState) (bool, error) {
 	const done = true
 
-	result, err := d.prepareForFinalSync(homeCluster)
-	if err != nil {
-		return !done, err
-	}
+	d.log.Info(fmt.Sprintf("Ensuring quiescing for cluster %s", homeCluster))
 
-	if !result {
-		d.setProgression(rmn.ProgressionPreparingFinalSync)
-
-		return !done, nil
-	}
-
+	// We need to clear the placement so that the workload is deleted.
 	clusterDecision := d.reconciler.getClusterDecision(d.userPlacement)
 	if clusterDecision.ClusterName != "" {
-		d.setDRState(rmn.Relocating)
+		d.setDRState(drState)
 		addOrUpdateCondition(&d.instance.Status.Conditions, rmn.ConditionAvailable, d.instance.Generation,
 			d.getConditionStatusForTypeAvailable(), string(d.instance.Status.Phase), "Starting quiescing for relocation")
 
@@ -912,80 +904,6 @@ func (d *DRPCInstance) quiesceAndRunFinalSync(homeCluster string) (bool, error) 
 			return !done, err
 		}
 	}
-
-	// Ensure final sync has been taken
-	result, err = d.runFinalSync(homeCluster)
-	if err != nil {
-		return !done, err
-	}
-
-	if !result {
-		d.setProgression(rmn.ProgressionRunningFinalSync)
-
-		return !done, nil
-	}
-
-	d.setProgression(rmn.ProgressionFinalSyncComplete)
-
-	return done, nil
-}
-
-func (d *DRPCInstance) prepareForFinalSync(homeCluster string) (bool, error) {
-	d.log.Info(fmt.Sprintf("Preparing final sync on cluster %s", homeCluster))
-
-	const done = true
-
-	vrg, ok := d.vrgs[homeCluster]
-
-	if !ok {
-		d.log.Info(fmt.Sprintf("prepareForFinalSync: VRG not available on cluster %s", homeCluster))
-
-		return !done, fmt.Errorf("VRG not found on Cluster %s", homeCluster)
-	}
-
-	if !vrg.Status.PrepareForFinalSyncComplete {
-		err := d.updateVRGToPrepareForFinalSync(homeCluster)
-		if err != nil {
-			return !done, err
-		}
-
-		// updated VRG to run final sync. Give it time...
-		d.log.Info(fmt.Sprintf("Giving enough time to prepare for final sync on cluster %s", homeCluster))
-
-		return !done, nil
-	}
-
-	d.log.Info("Preparing for final sync completed", "cluster", homeCluster)
-
-	return done, nil
-}
-
-func (d *DRPCInstance) runFinalSync(homeCluster string) (bool, error) {
-	d.log.Info(fmt.Sprintf("Running final sync on cluster %s", homeCluster))
-
-	const done = true
-
-	vrg, ok := d.vrgs[homeCluster]
-
-	if !ok {
-		d.log.Info(fmt.Sprintf("runFinalSync: VRG not available on cluster %s", homeCluster))
-
-		return !done, fmt.Errorf("VRG not found on Cluster %s", homeCluster)
-	}
-
-	if !vrg.Status.FinalSyncComplete {
-		err := d.updateVRGToRunFinalSync(homeCluster)
-		if err != nil {
-			return !done, err
-		}
-
-		// updated VRG to run final sync. Give it time...
-		d.log.Info(fmt.Sprintf("Giving it enough time to run final sync on cluster %s", homeCluster))
-
-		return !done, nil
-	}
-
-	d.log.Info("Running final sync completed", "cluster", homeCluster)
 
 	return done, nil
 }
