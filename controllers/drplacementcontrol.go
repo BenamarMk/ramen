@@ -1907,12 +1907,7 @@ func (d *DRPCInstance) updateVRGState(clusterName string, state rmn.ReplicationS
 	}
 
 	vrg.Spec.ReplicationState = state
-	if state == rmn.Secondary {
-		// Turn off the final sync flags
-		vrg.Spec.PrepareForFinalSync = false
-		vrg.Spec.RunFinalSync = false
-	}
-
+	
 	d.setVRGAction(vrg)
 
 	err = d.updateManifestWork(clusterName, vrg)
@@ -1923,66 +1918,6 @@ func (d *DRPCInstance) updateVRGState(clusterName string, state rmn.ReplicationS
 	d.log.Info(fmt.Sprintf("Updated VRG %s running in cluster %s to secondary", vrg.Name, clusterName))
 
 	return true, nil
-}
-
-func (d *DRPCInstance) updateVRGToPrepareForFinalSync(clusterName string) error {
-	d.log.Info(fmt.Sprintf("Updating VRG Spec to prepare for final sync on cluster %s", clusterName))
-
-	vrg, err := d.getVRGFromManifestWork(clusterName)
-	if err != nil {
-		return fmt.Errorf("failed to update VRG state. ClusterName %s (%w)",
-			clusterName, err)
-	}
-
-	if vrg.Spec.PrepareForFinalSync {
-		d.log.Info(fmt.Sprintf("VRG %s on cluster %s already has the prepare for final sync flag set",
-			vrg.Name, clusterName))
-
-		return nil
-	}
-
-	vrg.Spec.PrepareForFinalSync = true
-	vrg.Spec.RunFinalSync = false
-
-	err = d.updateManifestWork(clusterName, vrg)
-	if err != nil {
-		return err
-	}
-
-	d.log.Info(fmt.Sprintf("Updated VRG %s running in cluster %s to prepare for the final sync",
-		vrg.Name, clusterName))
-
-	return nil
-}
-
-func (d *DRPCInstance) updateVRGToRunFinalSync(clusterName string) error {
-	d.log.Info(fmt.Sprintf("Updating VRG Spec to run final sync on cluster %s", clusterName))
-
-	vrg, err := d.getVRGFromManifestWork(clusterName)
-	if err != nil {
-		return fmt.Errorf("failed to update VRG state. ClusterName %s (%w)",
-			clusterName, err)
-	}
-
-	if vrg.Spec.RunFinalSync {
-		d.log.Info(fmt.Sprintf("VRG %s on cluster %s already has the final sync flag set",
-			vrg.Name, clusterName))
-
-		return nil
-	}
-
-	vrg.Spec.RunFinalSync = true
-	vrg.Spec.PrepareForFinalSync = false
-
-	err = d.updateManifestWork(clusterName, vrg)
-	if err != nil {
-		return err
-	}
-
-	d.log.Info(fmt.Sprintf("Updated VRG %s running in cluster %s to run the final sync",
-		vrg.Name, clusterName))
-
-	return nil
 }
 
 func (d *DRPCInstance) updateManifestWork(clusterName string, vrg *rmn.VolumeReplicationGroup) error {

@@ -896,13 +896,6 @@ func (v *VRGInstance) processAsPrimary() ctrl.Result {
 }
 
 func (v *VRGInstance) shouldRestoreClusterData() bool {
-	if v.instance.Spec.PrepareForFinalSync || v.instance.Spec.RunFinalSync {
-		msg := "PV restore skipped, as VRG is orchestrating final sync"
-		setVRGClusterDataReadyCondition(&v.instance.Status.Conditions, v.instance.Generation, msg)
-
-		return false
-	}
-
 	clusterDataReady := findCondition(v.instance.Status.Conditions, VRGConditionTypeClusterDataReady)
 	if clusterDataReady != nil {
 		v.log.Info("ClusterDataReady condition",
@@ -934,10 +927,6 @@ func (v *VRGInstance) reconcileAsPrimary() {
 	v.reconcileVolRepsAsPrimary()
 	v.kubeObjectsProtectPrimary(&v.result)
 	v.vrgObjectProtect(&v.result)
-
-	if vrg.Spec.PrepareForFinalSync {
-		vrg.Status.PrepareForFinalSyncComplete = finalSyncPrepared.volSync
-	}
 }
 
 func (v *VRGInstance) pvcsDeselectedUnprotect() error {

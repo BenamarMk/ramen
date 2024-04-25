@@ -76,14 +76,7 @@ func (v *VRGInstance) restorePVsAndPVCsForVolSync() (int, error) {
 }
 
 func (v *VRGInstance) reconcileVolSyncAsPrimary(finalSyncPrepared *bool) (requeue bool) {
-	finalSyncComplete := func() {
-		*finalSyncPrepared = true
-		v.instance.Status.FinalSyncComplete = v.instance.Spec.RunFinalSync
-	}
-
 	if len(v.volSyncPVCs) == 0 {
-		finalSyncComplete()
-
 		return
 	}
 
@@ -113,7 +106,6 @@ func (v *VRGInstance) reconcileVolSyncAsPrimary(finalSyncPrepared *bool) (requeu
 		return requeue
 	}
 
-	finalSyncComplete()
 	v.log.Info("Successfully reconciled VolSync as Primary")
 
 	return requeue
