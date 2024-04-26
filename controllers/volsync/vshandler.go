@@ -58,6 +58,8 @@ const (
 
 	OwnerNameAnnotation      = "ramendr.openshift.io/owner-name"
 	OwnerNamespaceAnnotation = "ramendr.openshift.io/owner-namespace"
+
+	PvcVSFinalizerProtected = "volumereplicationgroups.ramendr.openshift.io/pvc-vs-protection"
 )
 
 type VSHandler struct {
@@ -913,6 +915,21 @@ func (v *VSHandler) EnsurePVCforDirectCopy(ctx context.Context,
 	pvc, err := v.getPVC(rdSpec.ProtectedPVC.Name)
 	if err != nil && !kerrors.IsNotFound(err) {
 		return err
+	}
+
+	if pvc != nil && util.ResourceIsDeleted(pvc) {
+		util.UpdatePVReclaimPolicy(
+			v.ctx,
+			v.client,
+			util.PVAnnotationRetainedForVolSync,
+			corev1.PersistentVolumeReclaimDelete,
+			pvc,
+			true,
+			v.log)
+
+		return util.NewResourceUpdater(pvc).
+			RemoveFinalizer(PvcVSFinalizerProtected).
+			Update(v.ctx, v.client)
 	}
 
 	if pvc != nil {

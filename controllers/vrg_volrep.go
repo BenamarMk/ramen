@@ -437,12 +437,12 @@ func (v *VRGInstance) preparePVCForVRDeletion(pvc *corev1.PersistentVolumeClaim,
 	// PVC may not be deleted). This is achieved by clearing the required claim ref.
 	// such that the PV can bind back to a recreated PVC. func ref.: updateExistingPVForSync
 	if v.instance.Spec.Async != nil || v.instance.Spec.ReplicationState == ramendrv1alpha1.Primary {
-		undoPVRetention(&pv)
+		undoPVRetention(pv)
 	}
 
 	delete(pv.Annotations, pvcVRAnnotationArchivedKey)
 
-	if err := v.reconciler.Update(v.ctx, &pv); err != nil {
+	if err := v.reconciler.Update(v.ctx, pv); err != nil {
 		log.Error(err, "Failed to update PersistentVolume for VR deletion")
 
 		return fmt.Errorf("failed to update PersistentVolume %s claimed by %s/%s"+
@@ -627,7 +627,7 @@ func (v *VRGInstance) UploadPVandPVCtoS3Store(s3ProfileName string, pvc *corev1.
 			pvc.Name, s3ProfileName, err)
 	}
 
-	return v.UploadPVAndPVCtoS3(s3ProfileName, objectStore, &pv, pvc)
+	return v.UploadPVAndPVCtoS3(s3ProfileName, objectStore, pv, pvc)
 }
 
 func (v *VRGInstance) UploadPVAndPVCtoS3(s3ProfileName string, objectStore ObjectStorer,
@@ -681,13 +681,13 @@ func (v *VRGInstance) UploadPVandPVCtoS3Stores(pvc *corev1.PersistentVolumeClaim
 	return succeededProfiles, nil
 }
 
-func (v *VRGInstance) getPVFromPVC(pvc *corev1.PersistentVolumeClaim) (corev1.PersistentVolume, error) {
-	pv := corev1.PersistentVolume{}
+func (v *VRGInstance) getPVFromPVC(pvc *corev1.PersistentVolumeClaim) (*corev1.PersistentVolume, error) {
+	pv := &corev1.PersistentVolume{}
 	volumeName := pvc.Spec.VolumeName
 	pvObjectKey := client.ObjectKey{Name: volumeName}
 
 	// Get PV from k8s
-	if err := v.reconciler.Get(v.ctx, pvObjectKey, &pv); err != nil {
+	if err := v.reconciler.Get(v.ctx, pvObjectKey, pv); err != nil {
 		return pv, fmt.Errorf("failed to get PV %v from PVC %v, %w",
 			pvObjectKey, client.ObjectKeyFromObject(pvc), err)
 	}
@@ -1805,7 +1805,7 @@ func (v *VRGInstance) addArchivedAnnotationForPVC(pvc *corev1.PersistentVolumeCl
 	}
 
 	pv.ObjectMeta.Annotations[pvcVRAnnotationArchivedKey] = v.generateArchiveAnnotation(pv.Generation)
-	if err := v.reconciler.Update(v.ctx, &pv); err != nil {
+	if err := v.reconciler.Update(v.ctx, pv); err != nil {
 		log.Error(err, "Failed to update PersistentVolume annotation")
 
 		return fmt.Errorf("failed to update PersistentVolume (%s) annotation (%s) belonging to"+

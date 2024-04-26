@@ -260,10 +260,12 @@ func DeletePVC(ctx context.Context,
 	return nil
 }
 
-func RetainPVAndUpdate(ctx context.Context,
+func UpdatePVReclaimPolicy(ctx context.Context,
 	k8sClient client.Client,
 	retainer string,
+	reclaimPolicy corev1.PersistentVolumeReclaimPolicy,
 	pvc *corev1.PersistentVolumeClaim,
+	cleanClaimRef bool,
 	log logr.Logger,
 ) error {
 	// Get PV bound to PVC
@@ -279,18 +281,30 @@ func RetainPVAndUpdate(ctx context.Context,
 	}
 
 	// Check reclaimPolicy of PV, if already set to retain
-	if pv.Spec.PersistentVolumeReclaimPolicy == corev1.PersistentVolumeReclaimRetain {
+	if pv.Spec.PersistentVolumeReclaimPolicy == reclaimPolicy {
 		return nil
 	}
 
 	// if not retained, retain PV, and add an annotation to denote this is updated for VolRep/VolSync
-	pv.Spec.PersistentVolumeReclaimPolicy = corev1.PersistentVolumeReclaimRetain
+	pv.Spec.PersistentVolumeReclaimPolicy = reclaimPolicy
 	if pv.ObjectMeta.Annotations == nil {
 		pv.ObjectMeta.Annotations = map[string]string{}
 	}
 
-	pv.ObjectMeta.Annotations[PVAnnotationRetainKey] = retainer
+	if reclaimPolicy == corev1.PersistentVolumeReclaimRetain {
+		pv.ObjectMeta.Annotations[PVAnnotationRetainKey] = retainer
+	} else {
+		delete(pv.ObjectMeta.Annotations, PVAnnotationRetainKey)
+	}
 
+	if cleanClaimRef {
+		if pv.Spec.ClaimRef != nil {
+			pv.Spec.ClaimRef.UID = ""
+			pv.Spec.ClaimRef.ResourceVersion = ""
+			pv.Spec.ClaimRef.APIVersion = ""
+		}
+	}
+	
 	if err := k8sClient.Update(ctx, pv); err != nil {
 		log.Error(err, "Failed to update PersistentVolume reclaim policy")
 

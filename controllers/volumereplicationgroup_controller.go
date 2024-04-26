@@ -474,7 +474,6 @@ const (
 	// Finalizers
 	vrgFinalizerName        = "volumereplicationgroups.ramendr.openshift.io/vrg-protection"
 	PvcVRFinalizerProtected = "volumereplicationgroups.ramendr.openshift.io/pvc-vr-protection"
-	PvcVSFinalizerProtected = "volumereplicationgroups.ramendr.openshift.io/pvc-vs-protection"
 	pvcInUse                = "kubernetes.io/pvc-protection"
 
 	// Annotations
@@ -922,7 +921,6 @@ func (v *VRGInstance) reconcileAsPrimary() {
 		volSync bool
 	}
 
-	vrg := v.instance
 	v.result.Requeue = v.reconcileVolSyncAsPrimary(&finalSyncPrepared.volSync)
 	v.reconcileVolRepsAsPrimary()
 	v.kubeObjectsProtectPrimary(&v.result)
