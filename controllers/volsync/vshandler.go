@@ -447,7 +447,11 @@ func (v *VSHandler) createOrUpdateRS(rsSpec ramendrv1alpha1.VolSyncReplicationSo
 
 		util.AddLabel(rs, VRGOwnerLabel, v.owner.GetName())
 
-		rs.Spec.SourcePVC = rsSpec.ProtectedPVC.Name
+		if runFinalSync {
+			rs.Spec.SourcePVC = rsSpec.ProtectedPVC.Name + "-for-final-sync"
+		} else {
+			rs.Spec.SourcePVC = rsSpec.ProtectedPVC.Name
+		}
 
 		if runFinalSync {
 			l.V(1).Info("ReplicationSource - final sync")
@@ -1508,6 +1512,36 @@ func isRSLastSyncTimeReady(rsStatus *volsyncv1alpha1.ReplicationSourceStatus) bo
 	}
 
 	return false
+}
+
+func (v *VSHandler) GetRSLastSyncTime(pvcName string) (*metav1.Time, error) {
+	l := v.log.WithValues("pvcName", pvcName)
+
+	// Get RD instance
+	rs := &volsyncv1alpha1.ReplicationSource{}
+
+	err := v.client.Get(v.ctx,
+		types.NamespacedName{
+			Name:      getReplicationSourceName(pvcName),
+			Namespace: v.owner.GetNamespace(),
+		}, rs)
+	if err != nil {
+		if !kerrors.IsNotFound(err) {
+			l.Error(err, "Failed to get ReplicationSource")
+
+			return nil, fmt.Errorf("%w", err)
+		}
+
+		l.Info("No ReplicationSource found", "pvcName", pvcName)
+
+		return nil, err
+	}
+
+	if rs.Status == nil {
+		return nil, fmt.Errorf("rs status is nil. (%s)", pvcName)
+	}
+
+	return rs.Status.LastSyncTime, nil
 }
 
 func (v *VSHandler) getRDLatestImage(pvcName string) (*corev1.TypedLocalObjectReference, error) {
