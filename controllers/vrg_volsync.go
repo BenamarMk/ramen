@@ -425,9 +425,11 @@ func (v VRGInstance) isVolSyncProtectedPVCConditionReady(conType string) bool {
 			if condition == nil || condition.Status != metav1.ConditionTrue {
 				ready = false
 
-				v.log.Info(fmt.Sprintf("VolSync %s is not complete yet for PVC %s", conType, protectedPVC.Name))
+				v.log.Info(fmt.Sprintf("VolSync: %s is not complete yet for PVC %s", conType, protectedPVC.Name))
 
 				break
+			} else {
+				v.log.Info(fmt.Sprintf("VolSync: %s is complete for PVC %s", conType, protectedPVC.Name))
 			}
 		}
 	}
@@ -554,7 +556,7 @@ func (v *VRGInstance) prepareAndReconcileForFinalSync() bool {
 		}
 
 		// Prepared and ran final sync successfully. Remove APP PVC finalizer.
-		err = v.cleanupAfterFinalSync(tmpPVC)
+		err = v.cleanupAfterFinalSync(appPVC, tmpPVC)
 		if err != nil {
 			v.log.Info("Final sync cleanup", "Error", err)
 
@@ -588,22 +590,29 @@ func (v *VRGInstance) updatePVForFinalSync(pvc *corev1.PersistentVolumeClaim, tm
 	return v.setPVReclaimPolicy(pvc, tmpPVCName, corev1.PersistentVolumeReclaimRetain, log)
 }
 
-func (v *VRGInstance) cleanupAfterFinalSync(pvc *corev1.PersistentVolumeClaim) error {
+func (v *VRGInstance) cleanupAfterFinalSync(appPVC, tmpPVC *corev1.PersistentVolumeClaim) error {
 	v.log.Info("Reset after final sync is complete")
 	// Prepared and ran final sync successfully. Remove APP PVC finalizer.
-	err := util.NewResourceUpdater(pvc).
+	err := v.setPVReclaimPolicy(appPVC, appPVC.GetName(), corev1.PersistentVolumeReclaimDelete, v.log)
+	if err != nil {
+		return err
+	}
+
+	err = util.NewResourceUpdater(tmpPVC).
 		RemoveFinalizer(volsync.PvcVSFinalizerProtected).
 		Update(v.ctx, v.reconciler.Client)
 	if err != nil {
 		return err // requeue
 	}
 
-	err = v.setPVReclaimPolicy(pvc, pvc.GetName(), corev1.PersistentVolumeReclaimDelete, v.log)
+	err = util.NewResourceUpdater(appPVC).
+		RemoveFinalizer(volsync.PvcVSFinalizerProtected).
+		Update(v.ctx, v.reconciler.Client)
 	if err != nil {
-		return err
+		return err // requeue
 	}
 
-	return v.reconciler.Client.Delete(v.ctx, pvc)
+	return v.reconciler.Client.Delete(v.ctx, tmpPVC)
 }
 
 func (v *VRGInstance) setPVReclaimPolicy(pvc *corev1.PersistentVolumeClaim, claimName string,
@@ -617,9 +626,11 @@ func (v *VRGInstance) setPVReclaimPolicy(pvc *corev1.PersistentVolumeClaim, clai
 	}
 
 	v.log.Info("Updating PV", "Name", pv.GetName(), "ReclaimPolicy", reclaimPolicy, "ClaimRef", claimName)
+
+	updated := false
 	if pv.Spec.PersistentVolumeReclaimPolicy != reclaimPolicy {
 		// Change reclaim policy if it has not been set earlier (on becoming primary)
-		ChangeReclaimPolicy(pv, reclaimPolicy, util.PVAnnotationRetainedForVolSync)
+		updated = ChangeReclaimPolicy(pv, reclaimPolicy, util.PVAnnotationRetainedForVolSync)
 	}
 
 	if pv.Spec.ClaimRef.Name != claimName {
@@ -627,12 +638,14 @@ func (v *VRGInstance) setPVReclaimPolicy(pvc *corev1.PersistentVolumeClaim, clai
 		ChangeClaimRef(pv, claimName)
 	}
 
-	if err := v.reconciler.Client.Update(v.ctx, pv); err != nil {
-		log.Error(err, "Failed to update PersistentVolume")
+	if updated {
+		if err := v.reconciler.Client.Update(v.ctx, pv); err != nil {
+			log.Error(err, "Failed to update PersistentVolume")
 
-		return fmt.Errorf("failed to update PersistentVolume resource (%s) reclaim policy for"+
-			" PersistentVolumeClaim resource (%s/%s), %w",
-			pvc.Spec.VolumeName, pvc.Namespace, pvc.Name, err)
+			return fmt.Errorf("failed to update PersistentVolume resource (%s) reclaim policy for"+
+				" PersistentVolumeClaim resource (%s/%s), %w",
+				pvc.Spec.VolumeName, pvc.Namespace, pvc.Name, err)
+		}
 	}
 
 	return nil
@@ -666,7 +679,7 @@ func (v *VRGInstance) createAndPrepareTmpPVForFinalSync(pvc *corev1.PersistentVo
 
 func (v *VRGInstance) reconcileForFinalSync(appPVC, tmpPVC *corev1.PersistentVolumeClaim) error {
 	v.log.Info("Reconcile final sync")
-	protectedPVC := &ramendrv1alpha1.ProtectedPVC{
+	newProtectedPVC := &ramendrv1alpha1.ProtectedPVC{
 		Name:               appPVC.GetName(),
 		Namespace:          appPVC.GetNamespace(),
 		ProtectedByVolSync: true,
@@ -675,6 +688,15 @@ func (v *VRGInstance) reconcileForFinalSync(appPVC, tmpPVC *corev1.PersistentVol
 		Labels:             appPVC.Labels,
 		AccessModes:        appPVC.Spec.AccessModes,
 		Resources:          appPVC.Spec.Resources,
+	}
+
+	protectedPVC := v.findFirstProtectedPVCWithName(appPVC.Name)
+	if protectedPVC == nil {
+		protectedPVC = newProtectedPVC
+		v.instance.Status.ProtectedPVCs = append(v.instance.Status.ProtectedPVCs, *protectedPVC)
+	} else if !reflect.DeepEqual(protectedPVC, newProtectedPVC) {
+		newProtectedPVC.Conditions = protectedPVC.Conditions
+		newProtectedPVC.DeepCopyInto(protectedPVC)
 	}
 
 	rsSpec := ramendrv1alpha1.VolSyncReplicationSourceSpec{

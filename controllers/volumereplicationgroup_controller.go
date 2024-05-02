@@ -533,7 +533,8 @@ func (v *VRGInstance) processVRG() ctrl.Result {
 		return v.invalid(err, "Failed to process list of PVCs to protect", true)
 	}
 
-	v.log = v.log.WithName("vrginstance").WithValues("State", v.instance.Spec.ReplicationState)
+	v.log = v.log.WithName("vrginstance").WithValues("State", v.instance.Spec.ReplicationState,
+		"action", v.instance.Spec.Action)
 	v.s3StoreAccessorsGet()
 
 	if rmnutil.ResourceIsDeleted(v.instance) {
@@ -1084,7 +1085,7 @@ func (v *VRGInstance) updateVRGConditionsAndStatus(result ctrl.Result) ctrl.Resu
 }
 
 func (v *VRGInstance) updateVRGStatus(result ctrl.Result) ctrl.Result {
-	v.log.Info("Updating VRG status")
+	v.log.Info("Updating VRG status", "result", result)
 
 	v.updateStatusState()
 

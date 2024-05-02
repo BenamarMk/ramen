@@ -304,6 +304,20 @@ func (v *VSHandler) ReconcileRS(rsSpec ramendrv1alpha1.VolSyncReplicationSourceS
 		return false, existingRS, err
 	}
 
+	if runFinalSync {
+		rs, err := v.getRS(getReplicationSourceName(rsSpec.ProtectedPVC.Name))
+		if err != nil && !kerrors.IsNotFound(err) {
+			return false, nil, err
+		}
+
+		if rs != nil {
+			srcPVC := rsSpec.ProtectedPVC.Name + "-for-final-sync"
+			if rs.Spec.SourcePVC != srcPVC {
+				return false, nil, v.DeleteRS(rs.GetName())
+			}
+		}
+	}
+
 	replicationSource, err := v.createOrUpdateRS(rsSpec, pskSecretName, runFinalSync)
 	if err != nil {
 		return false, replicationSource, err
@@ -447,20 +461,21 @@ func (v *VSHandler) createOrUpdateRS(rsSpec ramendrv1alpha1.VolSyncReplicationSo
 
 		util.AddLabel(rs, VRGOwnerLabel, v.owner.GetName())
 
-		if runFinalSync {
-			rs.Spec.SourcePVC = rsSpec.ProtectedPVC.Name + "-for-final-sync"
-		} else {
-			rs.Spec.SourcePVC = rsSpec.ProtectedPVC.Name
-		}
+		copyMethod := volsyncv1alpha1.CopyMethodSnapshot
 
 		if runFinalSync {
 			l.V(1).Info("ReplicationSource - final sync")
+
+			rs.Spec.SourcePVC = rsSpec.ProtectedPVC.Name + "-for-final-sync"
+			copyMethod = volsyncv1alpha1.CopyMethodDirect
 			// Change the schedule to instead use a keyword trigger - to trigger
 			// a final sync to happen
 			rs.Spec.Trigger = &volsyncv1alpha1.ReplicationSourceTriggerSpec{
 				Manual: FinalSyncTriggerString,
 			}
 		} else {
+			rs.Spec.Paused = false
+			rs.Spec.SourcePVC = rsSpec.ProtectedPVC.Name
 			// Set schedule
 			scheduleCronSpec, err := v.getScheduleCronSpec()
 			if err != nil {
@@ -480,7 +495,7 @@ func (v *VSHandler) createOrUpdateRS(rsSpec ramendrv1alpha1.VolSyncReplicationSo
 			ReplicationSourceVolumeOptions: volsyncv1alpha1.ReplicationSourceVolumeOptions{
 				// Always using CopyMethod of snapshot for now - could use 'Clone' CopyMethod for specific
 				// storage classes that support it in the future
-				CopyMethod:              volsyncv1alpha1.CopyMethodSnapshot,
+				CopyMethod:              copyMethod,
 				VolumeSnapshotClassName: &volumeSnapshotClassName,
 				StorageClassName:        rsSpec.ProtectedPVC.StorageClassName,
 				AccessModes:             rsSpec.ProtectedPVC.AccessModes,
@@ -645,7 +660,7 @@ func (v *VSHandler) getRS(name string) (*volsyncv1alpha1.ReplicationSource, erro
 			Namespace: v.owner.GetNamespace(),
 		}, rs)
 	if err != nil {
-		return nil, fmt.Errorf("%w", err)
+		return nil, err
 	}
 
 	return rs, nil
