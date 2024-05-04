@@ -304,20 +304,6 @@ func (v *VSHandler) ReconcileRS(rsSpec ramendrv1alpha1.VolSyncReplicationSourceS
 		return false, existingRS, err
 	}
 
-	if runFinalSync {
-		rs, err := v.getRS(getReplicationSourceName(rsSpec.ProtectedPVC.Name))
-		if err != nil && !kerrors.IsNotFound(err) {
-			return false, nil, err
-		}
-
-		if rs != nil {
-			srcPVC := rsSpec.ProtectedPVC.Name + "-for-final-sync"
-			if rs.Spec.SourcePVC != srcPVC {
-				return false, nil, v.DeleteRS(rs.GetName())
-			}
-		}
-	}
-
 	replicationSource, err := v.createOrUpdateRS(rsSpec, pskSecretName, runFinalSync)
 	if err != nil {
 		return false, replicationSource, err
@@ -444,6 +430,9 @@ func (v *VSHandler) createOrUpdateRS(rsSpec ramendrv1alpha1.VolSyncReplicationSo
 	// Remote service address created for the ReplicationDestination on the secondary
 	// The secondary namespace will be the same as primary namespace so use the vrg.Namespace
 	remoteAddress := getRemoteServiceNameForRDFromPVCName(rsSpec.ProtectedPVC.Name, v.owner.GetNamespace())
+	if val, ok := rsSpec.ProtectedPVC.Annotations["alias"]; ok {
+		remoteAddress = getRemoteServiceNameForRDFromPVCName(val, v.owner.GetNamespace())
+	}
 
 	rs := &volsyncv1alpha1.ReplicationSource{
 		ObjectMeta: metav1.ObjectMeta{
@@ -463,10 +452,11 @@ func (v *VSHandler) createOrUpdateRS(rsSpec ramendrv1alpha1.VolSyncReplicationSo
 
 		copyMethod := volsyncv1alpha1.CopyMethodSnapshot
 
+		rs.Spec.SourcePVC = rsSpec.ProtectedPVC.Name
+		
 		if runFinalSync {
 			l.V(1).Info("ReplicationSource - final sync")
 
-			rs.Spec.SourcePVC = rsSpec.ProtectedPVC.Name + "-for-final-sync"
 			copyMethod = volsyncv1alpha1.CopyMethodDirect
 			// Change the schedule to instead use a keyword trigger - to trigger
 			// a final sync to happen
@@ -474,8 +464,6 @@ func (v *VSHandler) createOrUpdateRS(rsSpec ramendrv1alpha1.VolSyncReplicationSo
 				Manual: FinalSyncTriggerString,
 			}
 		} else {
-			rs.Spec.Paused = false
-			rs.Spec.SourcePVC = rsSpec.ProtectedPVC.Name
 			// Set schedule
 			scheduleCronSpec, err := v.getScheduleCronSpec()
 			if err != nil {

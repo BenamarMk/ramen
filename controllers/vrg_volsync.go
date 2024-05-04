@@ -533,10 +533,10 @@ func (v *VRGInstance) prepareAndReconcileForFinalSync() bool {
 
 	requeue := false
 
-	for _, appPVC := range v.volSyncPVCs {
+	for _, pvc := range v.volSyncPVCs {
 		// Create the tmp pvc with the application pvc name and an internal suffix
-		tmpPVCName := appPVC.GetName() + FinalSyncPVCNameSuffix
-		tmpPVC, err := v.prepareFinalSync(&appPVC, tmpPVCName, v.log)
+		pvcName := pvc.GetName()
+		tmpPVC, tmpCreated, err := v.prepareFinalSync(&pvc, v.log)
 		if err != nil {
 			v.log.Info("Failed to prepare for final sync.", "Error", err)
 
@@ -545,8 +545,16 @@ func (v *VRGInstance) prepareAndReconcileForFinalSync() bool {
 			continue
 		}
 
+		if tmpCreated {
+			v.log.Info("Temp PVC was just created. Skipping RS reconciliation for it.", "pvc", pvcName)
+
+			requeue = true
+
+			continue
+		}
+
 		// Run finalsync
-		err = v.reconcileForFinalSync(appPVC, tmpPVC)
+		err = v.reconcileForFinalSync(tmpPVC)
 		if err != nil {
 			v.log.Info("Reconciled for final sync", "Error", err)
 
@@ -556,7 +564,7 @@ func (v *VRGInstance) prepareAndReconcileForFinalSync() bool {
 		}
 
 		// Prepared and ran final sync successfully. Remove APP PVC finalizer.
-		err = v.cleanupAfterFinalSync(appPVC, tmpPVC)
+		err = v.cleanupAfterFinalSync(tmpPVC)
 		if err != nil {
 			v.log.Info("Final sync cleanup", "Error", err)
 
@@ -574,11 +582,18 @@ func (v *VRGInstance) prepareAndReconcileForFinalSync() bool {
 // 2. Updates the ClaimRef to point to a new temporary PVC
 // 3. Create the temporary PVC
 func (v *VRGInstance) prepareFinalSync(pvc *corev1.PersistentVolumeClaim,
-	tmpPVCName string,
 	log logr.Logger,
-) (*corev1.PersistentVolumeClaim, error) {
+) (*corev1.PersistentVolumeClaim, bool, error) {
+	const created = true
+
+	if strings.HasSuffix(pvc.GetName(), FinalSyncPVCNameSuffix) {
+		return pvc, !created, nil
+	}
+
+	tmpPVCName := pvc.GetName() + FinalSyncPVCNameSuffix
+
 	if err := v.updatePVForFinalSync(pvc, tmpPVCName, log); err != nil {
-		return nil, err
+		return nil, !created, err
 	}
 
 	return v.createAndPrepareTmpPVForFinalSync(pvc, tmpPVCName, log)
@@ -590,22 +605,21 @@ func (v *VRGInstance) updatePVForFinalSync(pvc *corev1.PersistentVolumeClaim, tm
 	return v.setPVReclaimPolicy(pvc, tmpPVCName, corev1.PersistentVolumeReclaimRetain, log)
 }
 
-func (v *VRGInstance) cleanupAfterFinalSync(appPVC, tmpPVC *corev1.PersistentVolumeClaim) error {
+func (v *VRGInstance) cleanupAfterFinalSync(tmpPVC *corev1.PersistentVolumeClaim) error {
 	v.log.Info("Reset after final sync is complete")
-	// Prepared and ran final sync successfully. Remove APP PVC finalizer.
-	err := v.setPVReclaimPolicy(appPVC, appPVC.GetName(), corev1.PersistentVolumeReclaimDelete, v.log)
+	// Prepared and ran final sync successfully. 
+	// Remove APP PVC finalizer, but ensure the PV stays retained in order to avoid syncing the entire pv to the secondary 
+	claimName := tmpPVC.GetName()
+	if alias, ok := tmpPVC.GetAnnotations()["alias"]; ok && alias != "" {
+		claimName = alias
+	}
+
+	err := v.setPVReclaimPolicy(tmpPVC, claimName, corev1.PersistentVolumeReclaimRetain, v.log)
 	if err != nil {
 		return err
 	}
 
 	err = util.NewResourceUpdater(tmpPVC).
-		RemoveFinalizer(volsync.PvcVSFinalizerProtected).
-		Update(v.ctx, v.reconciler.Client)
-	if err != nil {
-		return err // requeue
-	}
-
-	err = util.NewResourceUpdater(appPVC).
 		RemoveFinalizer(volsync.PvcVSFinalizerProtected).
 		Update(v.ctx, v.reconciler.Client)
 	if err != nil {
@@ -635,7 +649,7 @@ func (v *VRGInstance) setPVReclaimPolicy(pvc *corev1.PersistentVolumeClaim, clai
 
 	if pv.Spec.ClaimRef.Name != claimName {
 		// Update the claimRef to the new tmp PVC.
-		ChangeClaimRef(pv, claimName)
+		updated = ChangeClaimRef(pv, claimName)
 	}
 
 	if updated {
@@ -652,12 +666,14 @@ func (v *VRGInstance) setPVReclaimPolicy(pvc *corev1.PersistentVolumeClaim, clai
 }
 
 func (v *VRGInstance) createAndPrepareTmpPVForFinalSync(pvc *corev1.PersistentVolumeClaim, tmpPVCName string, log logr.Logger,
-) (*corev1.PersistentVolumeClaim, error) {
+) (*corev1.PersistentVolumeClaim, bool, error) {
+	const created = true
+
 	tmpPVC := pvc.DeepCopy()
 	tmpPVC.ObjectMeta.Name = tmpPVCName
-	tmpPVC.ObjectMeta.Annotations = map[string]string{}
+	tmpPVC.ObjectMeta.Annotations = map[string]string{"alias": pvc.Name}
 	tmpPVC.ObjectMeta.Finalizers = []string{}
-	tmpPVC.ObjectMeta.Labels = map[string]string{}
+	tmpPVC.ObjectMeta.Labels = pvc.Labels
 	tmpPVC.ObjectMeta.ResourceVersion = ""
 	tmpPVC.ObjectMeta.OwnerReferences = nil
 
@@ -669,28 +685,45 @@ func (v *VRGInstance) createAndPrepareTmpPVForFinalSync(pvc *corev1.PersistentVo
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return nil, !created, err
 	}
 
 	log.V(1).Info("Temporary PVC", "operation", op)
 
-	return tmpPVC, nil
-}
+	log.V(1).Info("Cleaning app PVC and its corresponding RS", "app PVC", pvc.GetName())
 
-func (v *VRGInstance) reconcileForFinalSync(appPVC, tmpPVC *corev1.PersistentVolumeClaim) error {
-	v.log.Info("Reconcile final sync")
-	newProtectedPVC := &ramendrv1alpha1.ProtectedPVC{
-		Name:               appPVC.GetName(),
-		Namespace:          appPVC.GetNamespace(),
-		ProtectedByVolSync: true,
-		StorageClassName:   appPVC.Spec.StorageClassName,
-		Annotations:        protectedPVCAnnotations(*appPVC),
-		Labels:             appPVC.Labels,
-		AccessModes:        appPVC.Spec.AccessModes,
-		Resources:          appPVC.Spec.Resources,
+	if err := v.volSyncHandler.DeleteRS(pvc.GetName()); err != nil {
+		return nil, false, err
 	}
 
-	protectedPVC := v.findFirstProtectedPVCWithName(appPVC.Name)
+	if err := util.NewResourceUpdater(pvc).
+		RemoveFinalizer(volsync.PvcVSFinalizerProtected).
+		Update(v.ctx, v.reconciler.Client); err != nil {
+		return nil, false, err // requeue
+	}
+
+	return tmpPVC, created, nil
+}
+
+func (v *VRGInstance) getAlias(annotations map[string]string) string {
+	return annotations["alias"]
+}
+
+func (v *VRGInstance) reconcileForFinalSync(tmpPVC *corev1.PersistentVolumeClaim) error {
+	v.log.Info("Reconcile final sync")
+	originalPVCName := v.getAlias(tmpPVC.GetAnnotations())
+	newProtectedPVC := &ramendrv1alpha1.ProtectedPVC{
+		Name:               originalPVCName,
+		Namespace:          tmpPVC.GetNamespace(),
+		ProtectedByVolSync: true,
+		StorageClassName:   tmpPVC.Spec.StorageClassName,
+		Annotations:        tmpPVC.GetAnnotations(),
+		Labels:             tmpPVC.Labels,
+		AccessModes:        tmpPVC.Spec.AccessModes,
+		Resources:          tmpPVC.Spec.Resources,
+	}
+
+	protectedPVC := v.findFirstProtectedPVCWithName(originalPVCName)
 	if protectedPVC == nil {
 		protectedPVC = newProtectedPVC
 		v.instance.Status.ProtectedPVCs = append(v.instance.Status.ProtectedPVCs, *protectedPVC)
@@ -746,7 +779,9 @@ func ChangeReclaimPolicy(pv *corev1.PersistentVolume,
 	return updated
 }
 
-func ChangeClaimRef(pv *corev1.PersistentVolume, pvcName string) {
+func ChangeClaimRef(pv *corev1.PersistentVolume, pvcName string) bool {
 	pv.Spec.ClaimRef.Name = pvcName
 	preparePVForReclaim(pv)
+
+	return true
 }
