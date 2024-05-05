@@ -529,7 +529,7 @@ func (v *VRGInstance) protectPVCAndRetainPV(pvc *corev1.PersistentVolumeClaim) e
 }
 
 func (v *VRGInstance) prepareAndReconcileForFinalSync() bool {
-	v.log.Info("Reconcile VolSync as Secondary", "RDSpec", v.instance.Spec.VolSync.RDSpec)
+	v.log.Info("Reconcile VolSync as Secondary for final sync", "RDSpec", v.instance.Spec.VolSync.RDSpec)
 
 	requeue := false
 
@@ -586,6 +586,8 @@ func (v *VRGInstance) prepareFinalSync(pvc *corev1.PersistentVolumeClaim,
 ) (*corev1.PersistentVolumeClaim, bool, error) {
 	const created = true
 
+	v.log.Info("Prepare final sync")
+
 	if strings.HasSuffix(pvc.GetName(), FinalSyncPVCNameSuffix) {
 		return pvc, !created, nil
 	}
@@ -614,7 +616,7 @@ func (v *VRGInstance) cleanupAfterFinalSync(tmpPVC *corev1.PersistentVolumeClaim
 		claimName = alias
 	}
 
-	err := v.setPVReclaimPolicy(tmpPVC, claimName, corev1.PersistentVolumeReclaimRetain, v.log)
+	err := v.setPVReclaimPolicy(tmpPVC, claimName, corev1.PersistentVolumeReclaimDelete, v.log)
 	if err != nil {
 		return err
 	}

@@ -453,7 +453,7 @@ func (v *VSHandler) createOrUpdateRS(rsSpec ramendrv1alpha1.VolSyncReplicationSo
 		copyMethod := volsyncv1alpha1.CopyMethodSnapshot
 
 		rs.Spec.SourcePVC = rsSpec.ProtectedPVC.Name
-		
+
 		if runFinalSync {
 			l.V(1).Info("ReplicationSource - final sync")
 
