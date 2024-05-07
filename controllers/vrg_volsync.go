@@ -283,7 +283,7 @@ func (v *VRGInstance) buildClusterDataProtectedCondition() *metav1.Condition {
 				break
 			}
 
-			// Check now if we have synced up at least once for this PVC
+			// Check if we have synced up at least once for this PVC
 			rsDataProtected, err := v.volSyncHandler.IsRSDataProtected(protectedPVC.Name)
 			if err != nil || !rsDataProtected {
 				ready = false
@@ -366,28 +366,6 @@ func (v *VRGInstance) buildDataProtectedCondition() *metav1.Condition {
 			} else {
 				ready = false
 			}
-
-			// Check now if we have synced up at least once for this PVC
-			// rsDataProtected, err := v.volSyncHandler.IsRSDataProtected(protectedPVC.Name)
-			// if err != nil || !rsDataProtected {
-			// 	ready = false
-
-			// 	v.log.Info(fmt.Sprintf("First sync has not yet completed for VolSync RS %s -- Err %v",
-			// 		protectedPVC.Name, err))
-
-			// 	break
-			// }
-
-			// Check now if we have synced up at least once for this PVC
-			// lastSyncTime, err := v.volSyncHandler.GetRSLastSyncTime(protectedPVC.Name)
-			// if err != nil || lastSyncTime == nil {
-			// 	ready = false
-
-			// 	v.log.Info(fmt.Sprintf("First sync has not yet completed for VolSync RS %s -- Err %v",
-			// 		protectedPVC.Name, err))
-
-			// 	break
-			// }
 		}
 	}
 
