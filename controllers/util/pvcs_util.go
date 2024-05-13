@@ -260,6 +260,23 @@ func DeletePVC(ctx context.Context,
 	return nil
 }
 
+// UpdatePVReclaimPolicy updates the reclaim policy of a PV associated with a PVC.
+// The function retrieves the PV bound to the PVC, checks its current reclaim policy,
+// updates it if necessary, and optionally adds annotations for retention denoting the
+// caller (VolRep/VolSync). If cleanClaimRef is set to true, it cleans the claim reference
+// before updating the PV.
+//
+// It takes the following parameters:
+// - ctx: Context for the request.
+// - k8sClient: Kubernetes client for API operations.
+// - retainer: String identifier for caller reclaiming the PV (VolRep/VolSync).
+// - reclaimPolicy: Desired reclaim policy for the PV.
+// - pvc: Pointer to the PVC that is Bound to the PV.
+// - cleanClaimRef: Boolean flag indicating whether to clean claim reference.
+// - log: Logger for logging errors and information.
+//
+// Returns:
+// - error: An error if the update operation fails, otherwise nil.
 func UpdatePVReclaimPolicy(ctx context.Context,
 	k8sClient client.Client,
 	retainer string,
@@ -304,7 +321,7 @@ func UpdatePVReclaimPolicy(ctx context.Context,
 			pv.Spec.ClaimRef.APIVersion = ""
 		}
 	}
-	
+
 	if err := k8sClient.Update(ctx, pv); err != nil {
 		log.Error(err, "Failed to update PersistentVolume reclaim policy")
 

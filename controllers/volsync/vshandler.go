@@ -925,6 +925,7 @@ func (v *VSHandler) EnsurePVCforDirectCopy(ctx context.Context,
 	}
 
 	if pvc != nil && util.ResourceIsDeleted(pvc) {
+		// Update PV reclaim policy and clean the claimRef
 		util.UpdatePVReclaimPolicy(
 			v.ctx,
 			v.client,

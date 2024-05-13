@@ -2201,24 +2201,6 @@ func addRestoreAnnotation(obj client.Object) {
 	obj.GetAnnotations()[RestoreAnnotation] = RestoredByRamen
 }
 
-// preparePVForReclaim cleans up required PV or PVC fields, to ensure restore succeeds
-// to a new cluster, and rebinding the PVC to an existing PV with the same claimRef
-func preparePVForReclaim(pv *corev1.PersistentVolume) {
-	pv.ResourceVersion = ""
-	if pv.Spec.ClaimRef != nil {
-		pv.Spec.ClaimRef.UID = ""
-		pv.Spec.ClaimRef.ResourceVersion = ""
-		pv.Spec.ClaimRef.APIVersion = ""
-	}
-}
-
-func cleanupPVCForRestore(pvc *corev1.PersistentVolumeClaim) {
-	pvc.ObjectMeta.Annotations = PruneAnnotations(pvc.GetAnnotations())
-	pvc.ObjectMeta.Finalizers = []string{}
-	pvc.ObjectMeta.ResourceVersion = ""
-	pvc.ObjectMeta.OwnerReferences = nil
-}
-
 // Follow this logic to update VRG (and also ProtectedPVC) conditions for VolRep
 // while reconciling VolumeReplicationGroup resource.
 //
