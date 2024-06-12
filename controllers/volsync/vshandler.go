@@ -854,7 +854,8 @@ func (v *VSHandler) CleanupRDNotInSpecList(rdSpecList []ramendrv1alpha1.VolSyncR
 		foundInSpecList := false
 
 		for _, rdSpec := range rdSpecList {
-			if rd.GetName() == getReplicationDestinationName(rdSpec.ProtectedPVC.Name) {
+			if rd.GetName() == getReplicationDestinationName(rdSpec.ProtectedPVC.Name) &&
+				rd.GetNamespace() == rdSpec.ProtectedPVC.Namespace {
 				foundInSpecList = true
 
 				break
