@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 ---
-repo: https://github.com/youhangwang/ocm-ramen-samples.git
+repo: https://github.com/BenamarMk/ocm-ramen-samples.git
 path: subscription/deployment-k8s-regional-cephfs
-branch: main
+branch: consistency-group
 name: deployment-cephfs
 namespace: deployment-cephfs
 dr_policy: dr-policy

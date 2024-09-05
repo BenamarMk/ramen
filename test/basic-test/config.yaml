@@ -1,1 +1,1 @@
-../configs/deployment-k8s-regional-rbd.yaml
+/home/johan/ramen/test/configs/deployment-k8s-regional-cephfs.yaml
