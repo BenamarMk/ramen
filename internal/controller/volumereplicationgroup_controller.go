@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/ramendr/ramen/internal/controller/kubeobjects"
 	"github.com/ramendr/ramen/internal/controller/kubeobjects/velero"
+	"github.com/ramendr/ramen/internal/controller/util"
 	"golang.org/x/exp/maps" // TODO replace with "maps" in go1.21+
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
@@ -814,6 +815,12 @@ func (v *VRGInstance) separatePVCsUsingStorageClassProvisioner(pvcList *corev1.P
 			v.log.Info(fmt.Sprintf("Failed to get the storageclass %s", *scName))
 
 			return fmt.Errorf("failed to get the storageclass with name %s (%w)", *scName, err)
+		}
+
+		if util.IsPVCMarkedForVolSync(v.instance.GetAnnotations()) {
+			v.volSyncPVCs = append(v.volSyncPVCs, *pvc)
+
+			continue
 		}
 
 		replicationClassMatchFound := false
