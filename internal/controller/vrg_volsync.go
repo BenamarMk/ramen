@@ -56,9 +56,8 @@ func (v *VRGInstance) restorePVsAndPVCsForVolSync() (int, error) {
 
 			protectedPVC := FindProtectedPVC(v.instance, rdSpec.ProtectedPVC.Namespace, rdSpec.ProtectedPVC.Name)
 			if protectedPVC == nil {
-				protectedPVC = &ramendrv1alpha1.ProtectedPVC{}
-				rdSpec.ProtectedPVC.DeepCopyInto(protectedPVC)
-				v.instance.Status.ProtectedPVCs = append(v.instance.Status.ProtectedPVCs, *protectedPVC)
+				v.instance.Status.ProtectedPVCs = append(v.instance.Status.ProtectedPVCs, rdSpec.ProtectedPVC)
+				protectedPVC = &v.instance.Status.ProtectedPVCs[len(v.instance.Status.ProtectedPVCs)-1]
 			}
 
 			setVRGConditionTypeVolSyncPVRestoreError(&protectedPVC.Conditions, v.instance.Generation,
@@ -71,9 +70,8 @@ func (v *VRGInstance) restorePVsAndPVCsForVolSync() (int, error) {
 
 		protectedPVC := FindProtectedPVC(v.instance, rdSpec.ProtectedPVC.Namespace, rdSpec.ProtectedPVC.Name)
 		if protectedPVC == nil {
-			protectedPVC = &ramendrv1alpha1.ProtectedPVC{}
-			rdSpec.ProtectedPVC.DeepCopyInto(protectedPVC)
-			v.instance.Status.ProtectedPVCs = append(v.instance.Status.ProtectedPVCs, *protectedPVC)
+			v.instance.Status.ProtectedPVCs = append(v.instance.Status.ProtectedPVCs, rdSpec.ProtectedPVC)
+			protectedPVC = &v.instance.Status.ProtectedPVCs[len(v.instance.Status.ProtectedPVCs)-1]
 		}
 
 		setVRGConditionTypeVolSyncPVRestoreComplete(&protectedPVC.Conditions, v.instance.Generation, "PVC restored")
@@ -147,8 +145,8 @@ func (v *VRGInstance) reconcilePVCAsVolSyncPrimary(pvc corev1.PersistentVolumeCl
 
 	protectedPVC := FindProtectedPVC(v.instance, pvc.Namespace, pvc.Name)
 	if protectedPVC == nil {
-		protectedPVC = newProtectedPVC
-		v.instance.Status.ProtectedPVCs = append(v.instance.Status.ProtectedPVCs, *protectedPVC)
+		v.instance.Status.ProtectedPVCs = append(v.instance.Status.ProtectedPVCs, *newProtectedPVC)
+		protectedPVC = &v.instance.Status.ProtectedPVCs[len(v.instance.Status.ProtectedPVCs)-1]
 	} else if !reflect.DeepEqual(protectedPVC, newProtectedPVC) {
 		newProtectedPVC.Conditions = protectedPVC.Conditions
 		newProtectedPVC.DeepCopyInto(protectedPVC)
