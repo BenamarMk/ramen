@@ -23,8 +23,8 @@ import (
 )
 
 var (
-	VolumeGroupSnapshotNameFormat = "cephfscg-%s"
-	RestorePVCinCGNameFormat      = "cephfscg-%s"
+	VolumeGroupSnapshotNameFormat = "vs-cg-%s"
+	RestorePVCinCGNameFormat      = "vs-cg-%s"
 	SnapshotGroup                 = "snapshot.storage.k8s.io"
 	SnapshotGroupKind             = "VolumeSnapshot"
 )
