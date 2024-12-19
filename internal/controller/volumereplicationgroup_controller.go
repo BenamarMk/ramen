@@ -757,6 +757,13 @@ func (v *VRGInstance) addConsistencyGroupLabel(pvc *corev1.PersistentVolumeClaim
 		return fmt.Errorf("missing storageID for PVC %s/%s", pvc.GetNamespace(), pvc.GetName())
 	}
 
+	// FIXME: a temporay workaround for issue DFBUGS-XXX
+	// Remove this block once DFBUGS-XXX is fixed
+	storageID = "cephfs-" + storageID
+	if storageClass.Provisioner != DefaultCephFSCSIDriverName {
+		storageID = "rbd-" + storageID
+	}
+
 	// Add label for PVC, showing that this PVC is part of consistency group
 	return util.NewResourceUpdater(pvc).
 		AddLabel(ConsistencyGroupLabel, storageID).

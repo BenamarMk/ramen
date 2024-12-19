@@ -143,7 +143,7 @@ func (h *volumeGroupSourceHandler) CreateOrUpdateVolumeGroupSnapshot(
 	return nil
 }
 
-// CleanVolumeGroupSnapshot delete restored pvc, replicationsource and VolumeGroupSnapshot
+// CleanVolumeGroupSnapshot delete restored pvc and VolumeGroupSnapshot
 //
 //nolint:funlen
 func (h *volumeGroupSourceHandler) CleanVolumeGroupSnapshot(
@@ -425,7 +425,7 @@ func (h *volumeGroupSourceHandler) CreateOrUpdateReplicationSourceForRestoredPVC
 			}
 			replicationSource.Spec.RsyncTLS = &volsyncv1alpha1.ReplicationSourceRsyncTLSSpec{
 				ReplicationSourceVolumeOptions: volsyncv1alpha1.ReplicationSourceVolumeOptions{
-					CopyMethod:  volsyncv1alpha1.CopyMethodDirect,
+					CopyMethod: volsyncv1alpha1.CopyMethodDirect,
 				},
 
 				KeySecret: &h.VolsyncKeySecretName,
