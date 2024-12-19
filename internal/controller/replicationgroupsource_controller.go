@@ -42,8 +42,8 @@ ReplicationGroupSource create VolumeGroupSnapshot, Restored PVC and ReplicationS
 At the end of each sync, VolumeGroupSnapshot, Restored PVC will be deleted by ramen,
 ReplicationSource will not be deleted.
 
-2. VolumeGroupSnapshot Name = cephfscg-<ReplicationGroupSource Name>
-3. Restored PVC Name = cephfscg-<Application PVC Name>
+2. VolumeGroupSnapshot Name = vs-cg-<ReplicationGroupSource Name>
+3. Restored PVC Name = vs-cg-<Application PVC Name>
 4. ReplicationSource Name = ReplicationDestination Name = <Application PVC Name>
 
 5. ReplicationDestinationServiceName = volsync-rsync-tls-dst-<Application PVC Name>.<RD Namespace>.svc.clusterset.local

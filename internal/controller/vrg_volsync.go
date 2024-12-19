@@ -116,6 +116,8 @@ func (v *VRGInstance) reconcileVolSyncAsPrimary(finalSyncPrepared *bool) (requeu
 		if pvc.Status.Phase != corev1.ClaimBound {
 			v.log.Info("Skipping PVC - PVC is not Bound.", "name", pvc.GetName())
 
+			requeue = true
+
 			continue
 		}
 

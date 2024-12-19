@@ -1966,8 +1966,7 @@ func (v *VSHandler) createPVCFromSnapshot(rd *volsyncv1alpha1.ReplicationDestina
 	snapshotRef *corev1.TypedLocalObjectReference,
 	snapRestoreSize *resource.Quantity,
 ) (*corev1.PersistentVolumeClaim, error) {
-	l := v.log.WithValues("pvcName", rd.GetName(), "snapshotRef", snapshotRef,
-		"snapRestoreSize", snapRestoreSize)
+	l := v.log.WithValues("pvcName", rd.GetName(), "snapshotRef", snapshotRef, "snapRestoreSize", snapRestoreSize)
 
 	storageClass, err := v.getStorageClass(rdSpec.ProtectedPVC.StorageClassName)
 	if err != nil {
@@ -2017,8 +2016,6 @@ func (v *VSHandler) createPVCFromSnapshot(rd *volsyncv1alpha1.ReplicationDestina
 		return nil
 	})
 	if err != nil {
-		l.Error(err, "Unable to createOrUpdate PVC from snapshot for localRS")
-
 		return nil, fmt.Errorf("error creating or updating PVC from snapshot for localRS (%w)", err)
 	}
 
