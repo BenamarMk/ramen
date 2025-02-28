@@ -70,7 +70,7 @@ func Exhaustive(dt *testing.T) {
 			ctx := test.NewContext(workload, deployer, util.Ctx.Log)
 			t.Run(ctx.Name(), func(dt *testing.T) {
 				t := test.WithLog(dt, ctx.Logger())
-				t.Parallel()
+				//t.Parallel()
 				runTestFlow(t, ctx)
 			})
 		}
