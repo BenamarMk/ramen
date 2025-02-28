@@ -1,0 +1,11 @@
+#!/usr/bin/env python3
+
+# SPDX-FileCopyrightText: The RamenDR authors
+# SPDX-License-Identifier: Apache-2.0
+
+import os
+from drenv import cache
+
+os.chdir(os.path.dirname(__file__))
+cache.refresh("operator", "addons/cdi-operator-1.60.2.yaml")
+cache.refresh("cr", "addons/cdi-cr-1.60.2.yaml")

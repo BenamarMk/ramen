@@ -1,0 +1,52 @@
+# SPDX-FileCopyrightText: The RamenDR authors
+# SPDX-License-Identifier: Apache-2.0
+
+# Environment for testing Regional-DR in a setup without a hub.
+---
+name: "rdr-hubless"
+
+ramen:
+  hub: null
+  clusters: [dr1, dr2]
+  topology: regional-dr
+  features:
+    volsync: true
+
+templates:
+  - name: "dr-cluster"
+    driver: "$vm"
+    container_runtime: containerd
+    network: "$network"
+    memory: "6g"
+    extra_disks: 1
+    disk_size: "50g"
+    workers:
+      - addons:
+          - name: rook-operator
+          - name: rook-cluster
+          - name: rook-toolbox
+          - name: rook-pool
+          - name: rook-cephfs
+      - addons:
+          - name: external-snapshotter
+          - name: csi-addons
+          - name: olm
+          - name: minio
+          - name: velero
+          - name: recipe
+
+profiles:
+  - name: "dr1"
+    template: "dr-cluster"
+  - name: "dr2"
+    template: "dr-cluster"
+
+workers:
+  - addons:
+      - name: rbd-mirror
+        args: ["dr1", "dr2"]
+  - addons:
+      - name: submariner
+        args: ["dr1", "dr1", "dr2"]
+      - name: volsync
+        args: ["dr1", "dr2"]

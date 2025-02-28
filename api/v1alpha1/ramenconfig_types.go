@@ -6,11 +6,8 @@ package v1alpha1
 import (
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	cfg "sigs.k8s.io/controller-runtime/pkg/config/v1alpha1"
+	configv1alpha1 "k8s.io/component-base/config/v1alpha1"
 )
-
-// EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
-// NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 
 // ControllerType is the type of controller to run
 // +kubebuilder:validation:Enum=dr-hub;dr-cluster
@@ -74,6 +71,35 @@ type S3StoreProfile struct {
 	S3SecretRef v1.SecretReference `json:"s3SecretRef"`
 	//+optional
 	VeleroNamespaceSecretKeyRef *v1.SecretKeySelector `json:"veleroNamespaceSecretKeyRef,omitempty"`
+	// A CA bundle to use when verifying TLS connections to the provider
+	//+optional
+	CACertificates []byte `json:"caCertificates,omitempty"`
+}
+
+// ControllerMetrics defines the controller metrics configuration
+type ControllerMetrics struct {
+	// BindAddress is the TCP address that the controller should bind to
+	// for serving prometheus metrics.
+	// It can be set to "0" to disable the metrics serving.
+	// +optional
+	BindAddress string `json:"bindAddress,omitempty"`
+}
+
+// ControllerHealth defines the health configs.
+type ControllerHealth struct {
+	// HealthProbeBindAddress is the TCP address that the controller should bind to
+	// for serving health probes
+	// It can be set to "0" or "" to disable serving the health probe.
+	// +optional
+	HealthProbeBindAddress string `json:"healthProbeBindAddress,omitempty"`
+
+	// ReadinessEndpointName, defaults to "readyz"
+	// +optional
+	ReadinessEndpointName string `json:"readinessEndpointName,omitempty"`
+
+	// LivenessEndpointName, defaults to "healthz"
+	// +optional
+	LivenessEndpointName string `json:"livenessEndpointName,omitempty"`
 }
 
 //+kubebuilder:object:root=true
@@ -82,9 +108,18 @@ type S3StoreProfile struct {
 type RamenConfig struct {
 	metav1.TypeMeta `json:",inline"`
 
-	// ControllerManagerConfigurationSpec returns the configurations for controllers
-	cfg.ControllerManagerConfigurationSpec `json:",inline"`
+	// LeaderElection is the LeaderElection config to be used when configuring
+	// the manager.Manager leader election
+	// +optional
+	LeaderElection *configv1alpha1.LeaderElectionConfiguration `json:"leaderElection,omitempty"`
 
+	// Metrics contains the controller metrics configuration
+	// +optional
+	Metrics ControllerMetrics `json:"metrics,omitempty"`
+
+	// Health contains the controller health configuration
+	// +optional
+	Health ControllerHealth `json:"health,omitempty"`
 	// RamenControllerType defines the type of controller to run
 	RamenControllerType ControllerType `json:"ramenControllerType"`
 
@@ -93,7 +128,7 @@ type RamenConfig struct {
 
 	// MaxConcurrentReconciles is the maximum number of concurrent Reconciles which can be run.
 	// Defaults to 1.
-	MaxConcurrentReconciles int `json:",omitempty"`
+	MaxConcurrentReconciles int `json:"maxConcurrentReconciles,omitempty"`
 
 	// dr-cluster operator deployment/undeployment automation configuration
 	DrClusterOperator struct {
@@ -144,6 +179,18 @@ type RamenConfig struct {
 		// Velero namespace input
 		VeleroNamespaceName string `json:"veleroNamespaceName,omitempty"`
 	} `json:"kubeObjectProtection,omitempty"`
+
+	MultiNamespace struct {
+		// Enables feature to protect resources in namespaces other than VRG's
+		FeatureEnabled   bool `json:"FeatureEnabled,omitempty"`
+		VolsyncSupported bool `json:"volsyncSupported,omitempty"`
+	} `json:"multiNamespace,omitempty"`
+
+	// Unprotect deleted or deselected PVCs
+	VolumeUnprotectionEnabled bool `json:"volumeUnprotectionEnabled,omitempty"`
+
+	// RamenOpsNamespace is the namespace where resources for unmanaged apps are created
+	RamenOpsNamespace string `json:"ramenOpsNamespace,omitempty"`
 }
 
 func init() {

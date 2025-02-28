@@ -1,0 +1,43 @@
+# SPDX-FileCopyrightText: The RamenDR authors
+# SPDX-License-Identifier: Apache-2.0
+
+# yamllint disable rule:line-length
+---
+resources:
+  - https://raw.githubusercontent.com/rook/rook/release-1.16/deploy/examples/crds.yaml
+  - https://raw.githubusercontent.com/rook/rook/release-1.16/deploy/examples/common.yaml
+  - https://raw.githubusercontent.com/rook/rook/release-1.16/deploy/examples/operator.yaml
+
+patches:
+  - target:
+      kind: ConfigMap
+      name: rook-ceph-operator-config
+      namespace: rook-ceph
+    patch: |-
+      - op: add
+        path: /data/CSI_ENABLE_CSIADDONS
+        value: 'true'
+      - op: add
+        path: /data/CSI_ENABLE_OMAP_GENERATOR
+        value: 'true'
+  # Disable to avoid random failures when restaring the enviroment.
+  #   failed to call webhook:
+  #   Post "https://rook-ceph-admission-controller.rook-ceph.svc:443/
+  #   validate-ceph-rook-io-v1-cephblockpool?timeout=5s":
+  #   x509: certificate signed by unknown authority
+  - target:
+      kind: Deployment
+      name: rook-ceph-operator
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: not-used
+      spec:
+        template:
+          spec:
+            containers:
+              - name: rook-ceph-operator
+                env:
+                  - name: ROOK_DISABLE_ADMISSION_CONTROLLER
+                    value: 'true'

@@ -1,0 +1,16 @@
+# SPDX-FileCopyrightText: The RamenDR authors
+# SPDX-License-Identifier: Apache-2.0
+
+# Environment for testing the drenv with the $vm driver.
+---
+name: vm
+profiles:
+  - name: cluster
+    driver: $vm
+    container_runtime: containerd
+    cpus: 2
+    memory: "2g"
+    rosetta: false
+    workers:
+      - addons:
+          - name: example

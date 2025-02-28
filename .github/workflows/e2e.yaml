@@ -1,0 +1,120 @@
+# SPDX-FileCopyrightText: The RamenDR authors
+# SPDX-License-Identifier: Apache-2.0
+
+# yamllint disable rule:line-length
+---
+name: e2e
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+env:
+  # Limit number of drenv workers.
+  MAX_WORKERS: 4
+  BUILD_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+
+# cancel the in-progress workflow when PR is refreshed.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.head_ref || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  e2e-rdr:
+    runs-on: [self-hosted, e2e-rdr]
+    if: github.repository == 'RamenDR/ramen' && github.event.pull_request.author_association == 'MEMBER'
+
+    steps:
+    - name: Checkout Repo
+      uses: actions/checkout@v4
+
+    - name: Create virtual environment
+      run: |
+        hack/make-venv .venv
+
+    - name: Setup drenv
+      working-directory: test
+      run: |
+        source ../venv
+        drenv setup -v envs/regional-dr.yaml
+
+    - name: Delete clusters
+      if: always()
+      working-directory: test
+      run: |
+        source ../venv
+        drenv delete envs/regional-dr.yaml
+
+    - name: Setup libvirt
+      run: test/scripts/setup-libvirt
+
+    - name: Start clusters
+      uses: nick-fields/retry@v3
+      with:
+        timeout_minutes: 20
+        max_attempts: 3
+        command: |
+          cd test
+          source ../venv
+          drenv start --max-workers ${{ env.MAX_WORKERS }} envs/regional-dr.yaml
+
+    - name: Build ramen-operator container
+      run: make docker-build
+
+    - name: Deploy ramen
+      run: |
+        source venv
+        ramendev deploy test/envs/regional-dr.yaml
+
+    - name: Configure ramen
+      uses: nick-fields/retry@v3
+      with:
+        timeout_seconds: 120
+        max_attempts: 3
+        command: |
+          source venv
+          ramendev config test/envs/regional-dr.yaml
+
+    - name: Run e2e tests
+      run: |
+        cat e2e/config.yaml.sample >> e2e/config.yaml
+        cat ~/.config/drenv/rdr/config.yaml >> e2e/config.yaml
+        make e2e-rdr
+
+    - name: Gather environment data
+      if: always()
+      working-directory: test
+      # Gathering typically takes less than 15 seconds.
+      timeout-minutes: 3
+      run: drenv gather --directory gather.rdr envs/regional-dr.yaml
+
+    # Tar manually to work around github limitations with special chracters (:)
+    # in file names, and getting much smaller archives comapred with zip (6m vs
+    # 12m). This is also useful to collect all files in one archive.
+    # https://github.com/actions/upload-artifact/issues/546
+    - name: Archive artifacts
+      if: always()
+      run: tar czf e2e.${{ env.BUILD_ID }}.tar.gz test/gather.rdr e2e/ramen-e2e.log
+
+    - name: Upload artifacts
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: e2e.${{ env.BUILD_ID }}
+        path: e2e.${{ env.BUILD_ID }}.tar.gz
+        compression-level: 0
+        retention-days: 15
+
+    - name: Delete clusters
+      if: always()
+      working-directory: test
+      run: |
+        source ../venv
+        drenv delete envs/regional-dr.yaml
+
+    - name: Cleanup drenv
+      if: always()
+      working-directory: test
+      run: |
+        source ../venv
+        drenv cleanup -v envs/regional-dr.yaml

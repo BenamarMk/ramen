@@ -17,9 +17,16 @@ setuptools.setup(
     long_description=long_description,
     long_description_content_type="text/markdown",
     url="https://github.com/RamenDR/ramen",
-    packages=["drenv"],
+    packages=[
+        "drenv",
+        "drenv.providers",
+        "drenv.providers.lima",
+    ],
+    include_package_data=True,
     install_requires=[
         "PyYAML",
+        "toml",
+        "packaging",
     ],
     classifiers=[
         "Development Status :: 4 - Beta",
@@ -30,7 +37,7 @@ setuptools.setup(
         "Programming Language :: Python :: 3",
         "Topic :: Software Development :: Testing",
     ],
-    entry_points = {
-        'console_scripts': ['drenv=drenv.__main__:main'],
-    }
+    entry_points={
+        "console_scripts": ["drenv=drenv.__main__:main"],
+    },
 )

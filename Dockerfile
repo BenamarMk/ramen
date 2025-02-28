@@ -2,34 +2,25 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # Build the manager binary
-FROM golang:1.18 as builder
+FROM docker.io/library/golang:1.22 as builder
 
 WORKDIR /workspace
 # Copy the Go Modules manifests
 COPY go.mod go.mod
 COPY go.sum go.sum
+COPY api/ api/
 # cache deps before building and copying source so that we don't need to re-download as much
 # and so that source changes don't invalidate our downloaded layer
 RUN go mod download
 
 # Copy the go source
-COPY main.go main.go
-COPY api/ api/
-COPY controllers/ controllers/
+COPY cmd/main.go cmd/main.go
+COPY internal/controller/ internal/controller/
 
 # Build
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GO111MODULE=on go build -a -o manager main.go
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -a -o manager cmd/main.go
 
-# Add labels to image
-LABEL name="Ramen DR operator" \
-  vendor="github.com/RamenDR/ramen" \
-  version="1.0" \
-  summary="Provides disaster recovery and relocations services for workloads and their persistent data" \
-  description="Deploy Ramen DR operator"
-
-# ubi as base image: contains verified packages, unmodified files
-# required by openshift-preflight check
-FROM registry.access.redhat.com/ubi8/ubi
+FROM registry.access.redhat.com/ubi8/ubi-minimal
 WORKDIR /
 COPY --from=builder /workspace/manager .
 

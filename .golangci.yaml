@@ -30,37 +30,168 @@ linters-settings:
       SPDX-License-Identifier: Apache-2.0
   misspell:
     locale: US
+  promlinter:
+    strict: true
   wsl:
     allow-trailing-comment: true
-    enforce-err-cuddling: true
+    force-err-cuddling: true
+  revive:
+    ignore-generated-header: false
+    severity: error
+    rules:
+      - name: blank-imports
+      - name: context-as-argument
+      - name: context-keys-type
+      - name: dot-imports
+      - name: error-return
+      - name: error-strings
+      - name: error-naming
+      - name: exported
+      - name: increment-decrement
+      - name: var-naming
+      - name: var-declaration
+      - name: package-comments
+      - name: range
+      - name: receiver-naming
+      - name: time-naming
+      - name: unexported-return
+      - name: indent-error-flow
+      - name: errorf
+      - name: empty-block
+      - name: superfluous-else
+      - name: unreachable-code
+      - name: redefines-builtin-id
+      - name: atomic
+      - name: constant-logical-expr
+      - name: unnecessary-stmt
+      - name: get-return
+      - name: modifies-parameter
+      - name: modifies-value-receiver
+      - name: range-val-in-closure
+      - name: waitgroup-by-value
+      - name: call-to-gc
+      - name: duplicated-imports
+      - name: unhandled-error
+      # - name: flag-parameter
+      # - name: unused-receiver
+      # - name: unused-parameter
+      # - name: confusing-naming
+      # - name: import-shadowing
+      # - name: confusing-results
+      # - name: bool-literal-in-expr
+
+issues:
+  exclude-rules:
+    # Allow dot imports for ginkgo and gomega
+    - source: ginkgo|gomega
+      linters:
+        - revive
+      text: "should not use dot imports"
+    - source: "^func Test"
+      linters:
+        - funlen
+    - source: "^//"
+      linters:
+        - lll
+
 
 linters:
-  enable-all: true
-  disable:
-    - exhaustivestruct
-    - gochecknoglobals
-    - gochecknoinits
-    - godot
-    - godox
-    - paralleltest
-    - goerr113  # TODO: Need to introduce error definition and bring this back
-    - goheader  # TODO: Introduce back post fixing linter errors
-    - gci
-    - interfacer  # interfacer linter is archived and deprecated (https://github.com/mvdan/interfacer)
-    # TODO: fix folloing linter errors.
-    - exhaustruct
-    - tagliatelle
-    - gomoddirectives
-    - goimports
-    - wrapcheck
-    - varnamelen
-    - staticcheck
-    - nosnakecase
-    - ireturn
-    - nilnil
-    - containedctx
-    - nonamedreturns
-    - forcetypeassert
+  disable-all: true
+  enable:
+    - asasalint
+    - asciicheck
+    - bidichk
+    - bodyclose
+    #  - copyloopvar // Additional new replacement for go 1.22 (https://go.dev/blog/loopvar-preview) (deprecating exportloopref)
+    - cyclop
+    #  - deadcode // Fully deprecated, remove this line once an alternative is enabled for the same
+    - decorder
+    #  - depguard
+    - dogsled
+    - dupl
+    - durationcheck
+    - errcheck
+    - errchkjson
+    #  - errorlint
+    #  - execinquery // Fully deprecated, remove this line once an alternative is enabled for the same
+    - exhaustive
+    - forbidigo
+    - funlen
+    - gocognit
+    #  - goconst
+    - gocritic
+    - gocyclo
+    - gofmt
+    - gofumpt
+    #  - golint // Fully deprecated, remove this line once an alternative is enabled for the same
+    - gomodguard
+    - goprintffuncname
+    - gosec
+    - gosimple
+    - govet
+    - grouper
+    #  - ifshort // Fully deprecated, remove this line once an alternative is enabled for the same
+    - importas
+    - ineffassign
+    - interfacebloat
+    - lll
+    - loggercheck
+    - maintidx
+    - makezero
+    #  - maligned // Fully deprecated, remove this line once an alternative is enabled for the same
+    - misspell
+    - mnd
+    #  - nakedret
+    - nestif
+    - nilerr
+    - nlreturn
+    - noctx
+    #  - nolintlint
+    - nosprintfhostport
+    - prealloc
+    - predeclared
     - promlinter
-    - contextcheck
-    - errname
+    - reassign
+    - revive
+    - rowserrcheck
+    #  - scopelint // Fully deprecated, remove this line once an alternative is enabled for the same
+    - sqlclosecheck
+    #  - structcheck // Fully deprecated, remove this line once an alternative is enabled for the same
+    - stylecheck
+    - tenv
+    - testpackage
+    - thelper
+    - tparallel
+    - typecheck
+    - unconvert
+    - unparam
+    - unused
+    - usestdlibvars
+    #  - varcheck // Fully deprecated, remove this line once an alternative is enabled for the same
+    - wastedassign
+    - whitespace
+    - wsl
+    #  - gochecknoglobals
+    #  - gochecknoinits
+    #  - godot
+    #  - godox
+    #  - paralleltest
+    #  - goerr113  # TODO: Need to introduce error definition and bring this back
+    #  - goheader  # TODO: Introduce back post fixing linter errors
+    #  - gci
+    #  - interfacer  # interfacer linter is archived and deprecated (https://github.com/mvdan/interfacer)
+    #  - exhaustruct
+    #  - tagliatelle
+    #  - gomoddirectives
+    #  - goimports
+    #  - wrapcheck
+    #  - varnamelen
+    #  - staticcheck
+    #  - nosnakecase
+    #  - ireturn
+    #  - nilnil
+    #  - containedctx
+    #  - nonamedreturns
+    #  - forcetypeassert
+    #  - contextcheck
+    #  - errname

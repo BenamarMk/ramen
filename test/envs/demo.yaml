@@ -1,0 +1,21 @@
+# SPDX-FileCopyrightText: The RamenDR authors
+# SPDX-License-Identifier: Apache-2.0
+
+# Demo environment.
+---
+name: demo
+templates:
+  - name: "demo-cluster"
+    driver: $vm
+    container_runtime: containerd
+    network: $network
+    addons:
+      - ingress
+    workers:
+      - addons:
+          - name: demo
+profiles:
+  - name: demo1
+    template: demo-cluster
+  - name: demo2
+    template: demo-cluster

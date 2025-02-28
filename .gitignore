@@ -4,8 +4,11 @@
 *.dll
 *.so
 *.dylib
-bin
-testbin/*
+/bin
+/testbin/*
+
+# config files
+/e2e/config.yaml
 
 # Test binary, build with `go test -c`
 *.test
@@ -29,9 +32,34 @@ config/hub/bundle
 *.swo
 *~
 .vscode
+.vimrc
+.zed
+
+# Generated files
+.venv
+venv
 
 # Test enviromemnt generated files
-test/drenv.egg-info/
-test/**/__pycache__/
 test/.coverage
-test/.vimrc
+test/.coverage.*
+test/addons/kubevirt/vm/id_rsa.pub
+
+# Python generated files
+*.egg-info/
+__pycache__/
+test/build
+ramendev/build
+
+# Generated disk images
+*.qcow2
+*.iso
+
+# e2e generated files
+/e2e/ramen-e2e
+/e2e/ramen-e2e.log
+
+# Invalid placeholder CRD files
+/config/crd/bases/_.yaml
+
+# Ginkgo-related test files
+ginkgo.report

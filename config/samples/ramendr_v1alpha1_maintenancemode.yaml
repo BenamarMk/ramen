@@ -1,0 +1,9 @@
+apiVersion: ramendr.openshift.io/v1alpha1
+kind: MaintenanceMode
+metadata:
+  name: maintenancemode-sample
+spec:
+  storageProvisioner: sample.csi.storage.com
+  targetID: <storage-identifier>
+  modes:
+  - Failover

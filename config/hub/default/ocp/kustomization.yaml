@@ -1,0 +1,70 @@
+# Adds namespace to all resources.
+namespace: ramen-system
+
+# Value of this field is prepended to the
+# names of all resources, e.g. a deployment named
+# "wordpress" becomes "alices-wordpress".
+# Note that it should also match with the prefix (text before '-') of the namespace
+# field above.
+namePrefix: ramen-hub-
+
+#labels:
+#- includeSelectors: true
+#  pairs:
+#    someName: someValue
+
+transformers:
+- |-
+  apiVersion: builtin
+  kind: LabelTransformer
+  metadata:
+    name: temporary
+  labels:
+    app: ramen-hub
+  fieldSpecs:
+  - kind: Deployment
+    path: metadata/labels
+  - kind: Deployment
+    path: spec/selector/matchLabels
+  - kind: Deployment
+    path: spec/template/metadata/labels
+  - kind: Service
+    path: metadata/labels
+  - kind: Service
+    path: spec/selector
+  - kind: ServiceMonitor
+    path: metadata/labels
+  - kind: ServiceMonitor
+    path: spec/selector/matchLabels
+  - kind: ConfigMap
+    path: metadata/labels
+  - kind: PrometheusRule
+    path: metadata/labels  
+
+# [PROMETHEUS] To enable prometheus monitor, uncomment all sections with 'PROMETHEUS'.
+#-../prometheus
+
+# Protect the /metrics endpoint by putting it behind auth.
+# If you want your controller-manager to expose the /metrics
+# endpoint w/o any authn/z, please comment the following line.
+
+# Mount the controller config file for loading manager configurations
+# through a ComponentConfig type
+patches:
+- path: ../../../default/manager_auth_proxy_patch.yaml
+- path: ../../../default/manager_config_patch.yaml
+
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+- ../../crd
+- ../../rbac
+- ../../manager
+- ../../../prometheus
+- metrics_role_binding.yaml
+
+images:
+- name: kube-rbac-proxy
+  newName: gcr.io/kubebuilder/kube-rbac-proxy
+  newTag: v0.13.1

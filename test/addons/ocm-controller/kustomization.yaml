@@ -1,0 +1,27 @@
+# SPDX-FileCopyrightText: The RamenDR authors
+# SPDX-License-Identifier: Apache-2.0
+
+# yamllint disable rule:line-length
+
+---
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+# The default timeout (27 seconds) is too short when using a slow network.
+- https://github.com/stolostron/multicloud-operators-foundation.git/deploy/foundation/hub/overlays/ocm-controller?ref=main&timeout=300s
+images:
+- name: quay.io/stolostron/multicloud-manager
+  newTag: latest
+patches:
+# Ammend upstream kustomization since it does not add an image tag. We want an
+# image tag to pin to specific version.
+- target:
+    kind: Deployment
+    name: ocm-controller
+  patch: |-
+    - op: test
+      path: /spec/template/spec/containers/0/args/2
+      value: "--agent-addon-image=quay.io/stolostron/multicloud-manager"
+    - op: replace
+      path: /spec/template/spec/containers/0/args/2
+      value: "--agent-addon-image=quay.io/stolostron/multicloud-manager:latest"

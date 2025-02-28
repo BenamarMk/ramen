@@ -1,0 +1,31 @@
+# SPDX-FileCopyrightText: The RamenDR authors
+# SPDX-License-Identifier: Apache-2.0
+
+# Environment for testing OCM deployment using clusteradm.
+---
+name: "ocm"
+
+templates:
+  - name: "hub-cluster"
+    driver: "$vm"
+    container_runtime: containerd
+    network: "$network"
+    workers:
+      - addons:
+          - name: ocm-hub
+          - name: ocm-controller
+  - name: "dr-cluster"
+    driver: "$vm"
+    container_runtime: containerd
+    network: "$network"
+    workers:
+      - addons:
+          - name: ocm-cluster
+            args: ["$name", "hub"]
+profiles:
+  - name: "hub"
+    template: "hub-cluster"
+  - name: "dr1"
+    template: "dr-cluster"
+  - name: "dr2"
+    template: "dr-cluster"

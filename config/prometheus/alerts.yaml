@@ -1,0 +1,42 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  labels:
+    prometheus: k8s
+    role: alert-rules
+  name: alerting-rules
+  namespace: system
+spec:
+  groups:
+    - name: recording_rules
+      rules:
+        - record: ramen_sync_duration_seconds
+          expr: (time() - (ramen_last_sync_timestamp_seconds{job='ramen-hub-operator-metrics-service'}))
+        - record: ramen_rpo_difference
+          expr: ramen_sync_duration_seconds / on(policyname) group_left() (ramen_policy_schedule_interval_seconds{job="ramen-hub-operator-metrics-service"})
+    - name: alerts
+      rules:
+        - alert: VolumeSynchronizationDelay
+          expr: ramen_rpo_difference >= 3
+          for: 5s
+          labels:
+            severity: critical
+          annotations:
+            description: "The syncing of volumes is exceeding three times the scheduled snapshot interval, or the volumes have been recently protected. (DRPC: {{ $labels.obj_name }}, Namespace: {{ $labels.obj_namespace }})"
+            alert_type: "DisasterRecovery"
+        - alert: VolumeSynchronizationDelay
+          expr: ramen_rpo_difference > 2 and ramen_rpo_difference < 3
+          for: 5s
+          labels:
+            severity: warning
+          annotations:
+            description: "The syncing of volumes is exceeding two times the scheduled snapshot interval, or the volumes have been recently protected. (DRPC: {{ $labels.obj_name }}, Namespace: {{ $labels.obj_namespace }})"
+            alert_type: "DisasterRecovery"
+        - alert: WorkloadUnprotected
+          expr: ramen_workload_protection_status == 0
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            description: "Workload is not protected for disaster recovery (DRPC: {{ $labels.obj_name }}, Namespace: {{ $labels.obj_namespace }}). Inspect DRPC status.conditions for details."
+            alert_type: "DisasterRecovery"

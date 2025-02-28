@@ -8,9 +8,10 @@ namespace: ramen-system
 # field above.
 namePrefix: ramen-dr-cluster-
 
-# Labels to add to all resources and selectors.
-#commonLabels:
-#  someName: someValue
+#labels:
+#- includeSelectors: true
+#  pairs:
+#    someName: someValue
 
 transformers:
 - |-
@@ -31,6 +32,8 @@ transformers:
     path: metadata/labels
   - kind: Service
     path: spec/selector
+  - kind: ConfigMap
+    path: metadata/labels
 
 # [WEBHOOK] To enable webhook, uncomment all the sections with [WEBHOOK] prefix including the one in
 # crd/kustomization.yaml
@@ -46,9 +49,9 @@ transformers:
 
 # Mount the controller config file for loading manager configurations
 # through a ComponentConfig type
-patchesStrategicMerge:
-- ../../default/manager_auth_proxy_patch.yaml
-- ../../default/manager_config_patch.yaml
+patches:
+- path: ../../default/manager_auth_proxy_patch.yaml
+- path: ../../default/manager_config_patch.yaml
 
 # [WEBHOOK] To enable webhook, uncomment all the sections with [WEBHOOK] prefix including the one in
 # crd/kustomization.yaml
@@ -69,4 +72,4 @@ resources:
 images:
 - name: kube-rbac-proxy
   newName: gcr.io/kubebuilder/kube-rbac-proxy
-  newTag: v0.8.0
+  newTag: v0.13.1

@@ -36,18 +36,23 @@ IMAGE_REGISTRY ?= quay.io
 IMAGE_REPOSITORY ?= ramendr
 IMAGE_NAME ?= ramen
 IMAGE_TAG ?= latest
+PLATFORM ?= k8s
 IMAGE_TAG_BASE = $(IMAGE_REGISTRY)/$(IMAGE_REPOSITORY)/$(IMAGE_NAME)
-RBAC_PROXY_IMG ?= "gcr.io/kubebuilder/kube-rbac-proxy:v0.8.0"
+RBAC_PROXY_IMG ?= "gcr.io/kubebuilder/kube-rbac-proxy:v0.13.1"
 OPERATOR_SUGGESTED_NAMESPACE ?= ramen-system
+RAMEN_OPS_NAMESPACE ?= ramen-ops
 AUTO_CONFIGURE_DR_CLUSTER ?= true
+VELERO_NAMESPACE ?= velero
 
 HUB_NAME ?= $(IMAGE_NAME)-hub-operator
 ifeq (dr,$(findstring dr,$(IMAGE_NAME)))
-	DRCLUSTER_NAME = $(IMAGE_NAME)-cluster-operator
+	DRCLUSTER_NAME ?= $(IMAGE_NAME)-cluster-operator
 	BUNDLE_IMG_DRCLUSTER ?= $(IMAGE_TAG_BASE)-cluster-operator-bundle:$(IMAGE_TAG)
+	BUNDLE_PLATFORM = ocp
 else
-	DRCLUSTER_NAME = $(IMAGE_NAME)-dr-cluster-operator
+	DRCLUSTER_NAME ?= $(IMAGE_NAME)-dr-cluster-operator
 	BUNDLE_IMG_DRCLUSTER ?= $(IMAGE_TAG_BASE)-dr-cluster-operator-bundle:$(IMAGE_TAG)
+	BUNDLE_PLATFORM = k8s
 endif
 
 # SKIP_RANGE is a build time var, that provides a valid value for:
@@ -71,12 +76,6 @@ else
 GOBIN=$(shell go env GOBIN)
 endif
 
-# Setting SHELL to bash allows bash commands to be executed by recipes.
-# This is a requirement for 'setup-envtest.sh' in the test target.
-# Options are set to exit when a recipe line exits non-zero or a piped command fails.
-SHELL = /usr/bin/env bash -o pipefail
-.SHELLFLAGS = -ec
-
 # Set sed command appropriately
 SED_CMD:=sed
 ifeq ($(GOHOSTOS),darwin)
@@ -85,7 +84,6 @@ ifeq ($(GOHOSTOS),darwin)
 	endif
 endif
 
-GO_TEST_GINKGO_ARGS ?= -test.v -ginkgo.v -ginkgo.failFast
 
 DOCKERCMD ?= podman
 
@@ -115,62 +113,124 @@ manifests: controller-gen ## Generate WebhookConfiguration, ClusterRole and Cust
 generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.
 	$(CONTROLLER_GEN) object:headerFile="hack/boilerplate.go.txt" paths="./..."
 
-GOLANGCI_URL := https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh
-GOLANGCI_VERSION := 1.49.0
-GOLANGCI_INSTALLED_VER := $(shell testbin/golangci-lint version --format=short 2>&1)
-.PHONY: golangci-bin
-golangci-bin: ## Download and install goloanci-lint locally if necessary.
-ifeq (,$(GOLANGCI_INSTALLED_VER))
-	$(info Installing golangci-lint (version: $(GOLANGCI_VERSION)) into testbin)
-	curl -sSfL $(GOLANGCI_URL) | sh -s -- -b testbin v$(GOLANGCI_VERSION)
-else ifneq ($(GOLANGCI_VERSION),$(GOLANGCI_INSTALLED_VER))
-	$(error Incorrect version ($(GOLANGCI_INSTALLED_VER)) for golanci-lint found, expecting $(GOLANGCI_VERSION))
-endif
+
+# golangci-lint has a limitation that it doesn't lint subdirectories if
+# they are a different module.
+# see https://github.com/golangci/golangci-lint/issues/828
 
 .PHONY: lint
-lint: golangci-bin ## Run configured golangci-lint and pre-commit.sh linters against the code.
+lint: golangci-bin lint-config-verify lint-e2e lint-api ## Run configured golangci-lint and pre-commit.sh linters against the code.
 	testbin/golangci-lint run ./... --config=./.golangci.yaml
 	hack/pre-commit.sh
 
-ENVTEST_ASSETS_DIR=$(shell pwd)/testbin
-setup-envtest:
-	mkdir -p ${ENVTEST_ASSETS_DIR}
-	test -f ${ENVTEST_ASSETS_DIR}/setup-envtest.sh || curl -sSLo ${ENVTEST_ASSETS_DIR}/setup-envtest.sh https://raw.githubusercontent.com/kubernetes-sigs/controller-runtime/v0.8.3/hack/setup-envtest.sh
-	source ${ENVTEST_ASSETS_DIR}/setup-envtest.sh; fetch_envtest_tools $(ENVTEST_ASSETS_DIR); setup_envtest_env $(ENVTEST_ASSETS_DIR)
+lint-config-verify: golangci-bin ## Verify golangci-lint configuration file
+	testbin/golangci-lint config verify --config=./.golangci.yaml
 
-test: generate manifests setup-envtest ## Run tests.
-	go test ./... -coverprofile cover.out $(GO_TEST_GINKGO_ARGS)
+lint-e2e: golangci-bin ## Run configured golangci-lint for e2e module
+	cd e2e && ../testbin/golangci-lint run ./... --config=../.golangci.yaml
 
-test-pvrgl: generate manifests setup-envtest
-	go test ./controllers -coverprofile cover.out $(GO_TEST_GINKGO_ARGS) -ginkgo.focus ProtectedVolumeReplicationGroupList
+lint-api: golangci-bin ## Run configured golangci-lint for api module
+	cd api && ../testbin/golangci-lint run ./... --config=../.golangci.yaml
 
-test-vrg: generate manifests setup-envtest
-	go test ./controllers -coverprofile cover.out $(GO_TEST_GINKGO_ARGS) -ginkgo.focus VolumeReplicationGroup
+.PHONY: create-rdr-env
+create-rdr-env: drenv-prereqs ## Create a new rdr environment.
+	./hack/dev-env.sh create
 
-test-vrg-vr: generate manifests setup-envtest
-	go test ./controllers -coverprofile cover.out $(GO_TEST_GINKGO_ARGS) -ginkgo.focus VolumeReplicationGroupVolRep
+destroy-rdr-env: drenv-prereqs ## Destroy the existing rdr environment.
+	./hack/dev-env.sh destroy
 
-test-vrg-vs: generate manifests setup-envtest
-	go test ./controllers -coverprofile cover.out $(GO_TEST_GINKGO_ARGS) -ginkgo.focus VolumeReplicationGroupVolSync
+.PHONY: drenv-prereqs
+drenv-prereqs: ## Check the prerequisites for the drenv tool.
+	./hack/check-drenv-prereqs.sh
 
-test-drpc: generate manifests setup-envtest
-	go test ./controllers -coverprofile cover.out $(GO_TEST_GINKGO_ARGS) -ginkgo.focus DRPlacementControl
+##@ Tests
 
-test-drenv:
+test: generate manifests envtest ## Run all the tests.
+	 go test ./... -coverprofile cover.out
+
+test-pvrgl: generate manifests envtest ## Run ProtectedVolumeReplicationGroupList tests.
+	 go test ./internal/controller -coverprofile cover.out  -ginkgo.focus ProtectedVolumeReplicationGroupList
+
+test-obj: generate manifests envtest ## Run ObjectStorer tests.
+	 go test ./internal/controller -coverprofile cover.out  -ginkgo.focus FakeObjectStorer
+
+test-vs: generate manifests envtest ## Run VolumeSync tests.
+	 go test ./internal/controller/volsync -coverprofile cover.out
+
+test-vs-cg: generate manifests envtest ## Run VGS VolumeSync tests.
+	 go test ./internal/controller/cephfscg -coverprofile cover.out -ginkgo.focus Volumegroupsourcehandler
+
+test-vrg: generate manifests envtest ## Run VolumeReplicationGroup tests.
+	 go test ./internal/controller -coverprofile cover.out  -ginkgo.focus VolumeReplicationGroup
+
+test-vrg-pvc: generate manifests envtest ## Run VolumeReplicationGroupPVC tests.
+	 go test ./internal/controller -coverprofile cover.out  -ginkgo.focus VolumeReplicationGroupPVC
+
+test-vrg-vr: generate manifests envtest ## Run VolumeReplicationGroupVolRep tests.
+	 go test ./internal/controller -coverprofile cover.out  -ginkgo.focus VolumeReplicationGroupVolRep
+
+test-vrg-vs: generate manifests envtest ## Run VolumeReplicationGroupVolSync tests.
+	 go test ./internal/controller -coverprofile cover.out  -ginkgo.focus VolumeReplicationGroupVolSync
+
+test-vrg-recipe: generate manifests envtest ## Run VolumeReplicationGroupRecipe tests.
+	 go test ./internal/controller -coverprofile cover.out  -ginkgo.focus VolumeReplicationGroupRecipe
+
+test-vrg-kubeobjects: generate manifests envtest ## Run VolumeReplicationGroupKubeObjects tests.
+	 go test ./internal/controller -coverprofile cover.out  -ginkgo.focus VRG_KubeObjectProtection
+
+test-drpc: generate manifests envtest ## Run DRPlacementControl tests.
+	 go test ./internal/controller -coverprofile cover.out  -ginkgo.focus DRPlacementControl
+
+test-drcluster: generate manifests envtest ## Run DRCluster tests.
+	 go test ./internal/controller -coverprofile cover.out  -ginkgo.focus DRClusterController
+
+test-drpolicy: generate manifests envtest ## Run DRPolicy tests.
+	 go test ./internal/controller -coverprofile cover.out  -ginkgo.focus DRPolicyController
+
+test-drclusterconfig: generate manifests envtest ## Run DRClusterConfig tests.
+	 go test ./internal/controller -coverprofile cover.out  -ginkgo.focus DRClusterConfig
+
+test-util: generate manifests envtest ## Run util tests.
+	 go test ./internal/controller/util -coverprofile cover.out
+
+test-util-pvc: generate manifests envtest ## Run util-pvc tests.
+	 go test ./internal/controller/util -coverprofile cover.out  -ginkgo.focus PVCS_Util
+
+test-kubeobjects: ## Run kubeobjects tests.
+	 go test ./internal/controller/kubeobjects -coverprofile cover.out  -ginkgo.focus Kubeobjects
+
+test-cephfs-cg: generate manifests envtest ## Run util-pvc tests.
+	 go test ./internal/controller/util -coverprofile cover.out  -ginkgo.focus CephfsCg
+
+
+test-drenv: ## Run drenv tests.
 	$(MAKE) -C test
+
+test-ramendev: ## Run ramendev tests.
+	$(MAKE) -C ramendev
+
+e2e-rdr: generate manifests ## Run rdr-e2e tests.
+	cd e2e && ./run.sh
+
+coverage:
+	go tool cover -html=cover.out
+
+.PHONY: venv
+venv:
+	hack/make-venv
 
 ##@ Build
 
 # Build manager binary
-build: generate  ## Build manager binary.
-	go build -o bin/manager main.go
+build: generate manifests  ## Build manager binary.
+	go build -o bin/manager cmd/main.go
 
 # Run against the configured Kubernetes cluster in ~/.kube/config
 run-hub: generate manifests ## Run DR Orchestrator controller from your host.
-	go run ./main.go --config=examples/dr_hub_config.yaml
+	go run ./cmd/main.go --config=examples/dr_hub_config.yaml
 
 run-dr-cluster: generate manifests ## Run DR manager controller from your host.
-	go run ./main.go --config=examples/dr_cluster_config.yaml
+	go run ./cmd/main.go --config=examples/dr_cluster_config.yaml
 
 docker-build: ## Build docker image with the manager.
 	$(DOCKERCMD) build -t ${IMG} .
@@ -179,6 +239,8 @@ docker-push: ## Push docker image with the manager.
 	$(DOCKERCMD) push ${IMG}
 
 ##@ Deployment
+
+resources: manifests hub-config dr-cluster-config ## Prepare resources for deployment
 
 install: install-hub install-dr-cluster ## Install hub and dr-cluster CRDs into the K8s cluster specified in ~/.kube/config.
 
@@ -194,13 +256,15 @@ install-hub: manifests kustomize ## Install hub CRDs into the K8s cluster specif
 uninstall-hub: manifests kustomize ## Uninstall hub CRDs from the K8s cluster specified in ~/.kube/config.
 	$(KUSTOMIZE) build --load-restrictor LoadRestrictionsNone config/hub/crd | kubectl delete -f -
 
-deploy-hub: manifests kustomize ## Deploy hub controller to the K8s cluster specified in ~/.kube/config.
-	cd config/hub/default && $(KUSTOMIZE) edit set image kube-rbac-proxy=$(RBAC_PROXY_IMG)
+hub-config: kustomize
+	cd config/hub/default/$(PLATFORM) && $(KUSTOMIZE) edit set image kube-rbac-proxy=$(RBAC_PROXY_IMG)
 	cd config/hub/manager && $(KUSTOMIZE) edit set image controller=${IMG}
-	$(KUSTOMIZE) build --load-restrictor LoadRestrictionsNone config/hub/default | kubectl apply -f -
+
+deploy-hub: manifests kustomize hub-config ## Deploy hub controller to the K8s cluster specified in ~/.kube/config.
+	$(KUSTOMIZE) build --load-restrictor LoadRestrictionsNone config/hub/default/$(PLATFORM) | kubectl apply -f -
 
 undeploy-hub: kustomize ## Undeploy hub controller from the K8s cluster specified in ~/.kube/config.
-	$(KUSTOMIZE) build --load-restrictor LoadRestrictionsNone config/hub/default | kubectl delete -f -
+	$(KUSTOMIZE) build --load-restrictor LoadRestrictionsNone config/hub/default/$(PLATFORM) | kubectl delete -f - --ignore-not-found
 
 install-dr-cluster: manifests kustomize ## Install dr-cluster CRDs into the K8s cluster specified in ~/.kube/config.
 	$(KUSTOMIZE) build --load-restrictor LoadRestrictionsNone config/dr-cluster/crd | kubectl apply -f -
@@ -210,61 +274,45 @@ uninstall-dr-cluster: manifests kustomize ## Uninstall dr-cluster CRDs from the 
 
 dr-cluster-config: kustomize
 	cd config/dr-cluster/default && $(KUSTOMIZE) edit set image kube-rbac-proxy=$(RBAC_PROXY_IMG)
-	cd config/dr-cluster/manager && $(KUSTOMIZE) edit set image controller=${IMG};\
-	sed -n '/^kubeObjectProtection:/{:1;n;/^ /b1};p' ramen_manager_config.yaml>a;mv a ramen_manager_config.yaml;\
-	if (: $${KUBE_OBJECT_PROTECTION_DISABLED?})2>/dev/null;then printf 'kubeObjectProtection:\n  disabled: true\n'>>ramen_manager_config.yaml;fi
+	cd config/dr-cluster/manager && $(KUSTOMIZE) edit set image controller=${IMG}
 
 deploy-dr-cluster: manifests kustomize dr-cluster-config ## Deploy dr-cluster controller to the K8s cluster specified in ~/.kube/config.
 	$(KUSTOMIZE) build --load-restrictor LoadRestrictionsNone config/dr-cluster/default | kubectl apply -f -
 
 undeploy-dr-cluster: kustomize ## Undeploy dr-cluster controller from the K8s cluster specified in ~/.kube/config.
-	$(KUSTOMIZE) build --load-restrictor LoadRestrictionsNone config/dr-cluster/default | kubectl delete -f -
+	$(KUSTOMIZE) build --load-restrictor LoadRestrictionsNone config/dr-cluster/default | kubectl delete -f - --ignore-not-found
 
 ##@ Tools
 
 CONTROLLER_GEN = $(shell pwd)/bin/controller-gen
-controller_gen_version=v0.9.0
-controller-gen: ## Download controller-gen locally if necessary.
-	@test '$(shell $(CONTROLLER_GEN) --version)' = 'Version: $(controller_gen_version)' ||\
-	$(call go-get-tool,sigs.k8s.io/controller-tools/cmd/controller-gen@$(controller_gen_version))
+controller-gen: ## Download controller-gen locally.
+	@hack/install-controller-gen.sh
 
+.PHONY: kustomize
 KUSTOMIZE = $(shell pwd)/bin/kustomize
-kustomize: ## Download kustomize locally if necessary.
-	@test -f $(KUSTOMIZE) ||\
-	$(call go-get-tool,sigs.k8s.io/kustomize/kustomize/v4@v4.5.7)
+kustomize: ## Download kustomize locally.
+	@hack/install-kustomize.sh
 
-# go-get-tool will 'go get' any package $1 and install it to bin/.
-PROJECT_DIR := $(shell dirname $(abspath $(lastword $(MAKEFILE_LIST))))
-define go-get-tool
-{ \
-set -e ;\
-TMP_DIR=$$(mktemp -d) ;\
-cd $$TMP_DIR ;\
-go mod init tmp ;\
-echo "Downloading $(1)" ;\
-GOBIN=$(PROJECT_DIR)/bin go install $(1) ;\
-rm -rf $$TMP_DIR ;\
-}
-endef
-
-##@ Bundle
+.PHONY: opm
+OPM = ./bin/opm
+opm: ## Download opm locally.
+	@./hack/install-opm.sh
 
 .PHONY: operator-sdk
 OSDK = ./bin/operator-sdk
-operator-sdk: ## Download operator-sdk locally if necessary.
-ifeq (,$(wildcard $(OSDK)))
-ifeq (,$(shell which operator-sdk 2>/dev/null))
-	@{ \
-	set -e ;\
-	mkdir -p $(dir $(OSDK)) ;\
-	OS=$(shell go env GOOS) && ARCH=$(shell go env GOARCH) && \
-	curl -sSLo $(OSDK) https://github.com/operator-framework/operator-sdk/releases/download/v1.11.0/operator-sdk_$${OS}_$${ARCH} ;\
-	chmod +x $(OSDK) ;\
-	}
-else
-OSDK = $(shell which operator-sdk)
-endif
-endif
+operator-sdk: ## Download operator-sdk locally.
+	@hack/install-operator-sdk.sh
+
+.PHONY: golangci-bin
+golangci-bin: ## Download golangci-lint locally.
+	@hack/install-golangci-lint.sh
+
+.PHONY: envtest
+envtest: ## Download envtest locally.
+	hack/install-setup-envtest.sh
+
+
+##@ Bundle
 
 .PHONY: bundle
 bundle: bundle-hub bundle-dr-cluster ## Generate all bundle manifests and metadata, then validate generated files.
@@ -277,12 +325,14 @@ bundle-push: bundle-hub-push bundle-dr-cluster-push ## Push all bundle images.
 
 .PHONY: bundle-hub
 bundle-hub: manifests kustomize operator-sdk ## Generate hub bundle manifests and metadata, then validate generated files.
-	cd config/hub/default && $(KUSTOMIZE) edit set image kube-rbac-proxy=$(RBAC_PROXY_IMG)
+	cd config/hub/default/$(BUNDLE_PLATFORM) && $(KUSTOMIZE) edit set image kube-rbac-proxy=$(RBAC_PROXY_IMG)
 	cd config/hub/manager && $(KUSTOMIZE) edit set image controller=$(IMG)
 	cd config/hub/manifests/$(IMAGE_NAME) && $(KUSTOMIZE) edit add patch --name ramen-hub-operator.v0.0.0 --kind ClusterServiceVersion\
 		--patch '[{"op": "add", "path": "/metadata/annotations/olm.skipRange", "value": "$(SKIP_RANGE)"}]' && \
 		$(KUSTOMIZE) edit add patch --name ramen-hub-operator.v0.0.0 --kind ClusterServiceVersion\
 		--patch '[{"op": "replace", "path": "/spec/replaces", "value": "$(REPLACES)"}]'
+	$(SED_CMD) -e "s,ramenOpsNamespace: ramen-ops,ramenOpsNamespace: $(RAMEN_OPS_NAMESPACE)," -i config/hub/manager/ramen_manager_config.yaml
+	$(SED_CMD) -e "s,veleroNamespaceName: velero,veleroNamespaceName: $(VELERO_NAMESPACE)," -i config/hub/manager/ramen_manager_config.yaml
 	$(SED_CMD) -e "s,channelName: alpha,channelName: $(DEFAULT_CHANNEL)," -i config/hub/manifests/$(IMAGE_NAME)/ramen_manager_config_append.yaml
 	$(SED_CMD) -e "s,packageName: ramen-dr-cluster-operator,packageName: $(DRCLUSTER_NAME)," -i config/hub/manifests/$(IMAGE_NAME)/ramen_manager_config_append.yaml
 	$(SED_CMD) -e "s,namespaceName: ramen-system,namespaceName: $(OPERATOR_SUGGESTED_NAMESPACE)," -i config/hub/manifests/$(IMAGE_NAME)/ramen_manager_config_append.yaml
@@ -307,6 +357,8 @@ bundle-dr-cluster: manifests kustomize dr-cluster-config operator-sdk ## Generat
 		--patch '[{"op": "add", "path": "/metadata/annotations/olm.skipRange", "value": "$(SKIP_RANGE)"}]' && \
 		$(KUSTOMIZE) edit add patch --name ramen-dr-cluster-operator.v0.0.0 --kind ClusterServiceVersion\
 		--patch '[{"op": "replace", "path": "/spec/replaces", "value": "$(REPLACES)"}]'
+	$(SED_CMD) -e "s,ramenOpsNamespace: ramen-ops,ramenOpsNamespace: $(RAMEN_OPS_NAMESPACE)," -i config/dr-cluster/manager/ramen_manager_config.yaml
+	$(SED_CMD) -e "s,veleroNamespaceName: velero,veleroNamespaceName: $(VELERO_NAMESPACE)," -i config/dr-cluster/manager/ramen_manager_config.yaml
 	$(KUSTOMIZE) build --load-restrictor LoadRestrictionsNone config/dr-cluster/manifests/$(IMAGE_NAME) | $(OSDK) generate bundle -q --package=$(DRCLUSTER_NAME) --overwrite --output-dir=config/dr-cluster/bundle --version $(VERSION) $(BUNDLE_METADATA_OPTS)
 	$(OSDK) bundle validate config/dr-cluster/bundle
 
@@ -317,23 +369,6 @@ bundle-dr-cluster-build: bundle-dr-cluster ## Build the dr-cluster bundle image.
 .PHONY: bundle-dr-cluster-push
 bundle-dr-cluster-push: ## Push the dr-cluster bundle image.
 	$(MAKE) docker-push IMG=$(BUNDLE_IMG_DRCLUSTER)
-
-.PHONY: opm
-OPM = ./bin/opm
-opm: ## Download opm locally if necessary.
-ifeq (,$(wildcard $(OPM)))
-ifeq (,$(shell which opm 2>/dev/null))
-	@{ \
-	set -e ;\
-	mkdir -p $(dir $(OPM)) ;\
-	OS=$(shell go env GOOS) && ARCH=$(shell go env GOARCH) && \
-	curl -sSLo $(OPM) https://github.com/operator-framework/operator-registry/releases/download/v1.15.1/$${OS}-$${ARCH}-opm ;\
-	chmod +x $(OPM) ;\
-	}
-else
-OPM = $(shell which opm)
-endif
-endif
 
 # A comma-separated list of bundle images (e.g. make catalog-build BUNDLE_IMGS=example.com/operator-bundle:v0.1.0,example.com/operator-bundle:v0.2.0).
 # These images MUST exist in a registry and be pull-able.
@@ -365,3 +400,27 @@ catalog-build: opm ## Build a catalog image.
 .PHONY: catalog-push
 catalog-push: ## Push a catalog image.
 	$(MAKE) docker-push IMG=$(CATALOG_IMG)
+
+# PLATFORMS defines the target platforms for  the manager image be build to provide support to multiple
+# architectures. (i.e. make docker-buildx IMG=myregistry/mypoperator:0.0.1). To use this option you need to:
+# - able to use docker buildx . More info: https://docs.docker.com/build/buildx/
+# - have enable BuildKit, More info: https://docs.docker.com/develop/develop-images/build_enhancements/
+.PHONY: docker-buildx
+docker-buildx: # Build and push docker image for the manager for cross-platform support
+ifeq ($(DOCKERCMD),docker)
+	# copy existing Dockerfile and insert --platform=${BUILDPLATFORM} and
+	# replace GOARCH value to ${TARGETARCH} into Dockerfile.cross, and preserve the original Dockerfile
+	$(eval PLATFORMS="linux/arm64,linux/amd64,linux/s390x,linux/ppc64le")
+	$(SED_CMD) \
+		-e '1 s/\(^FROM\)/FROM --platform=\$$\{BUILDPLATFORM\}/; t' \
+		-e ' 1,// s//FROM --platform=\$$\{BUILDPLATFORM\}/' \
+		Dockerfile > Dockerfile.cross
+	$(SED_CMD) -e 's/GOARCH=amd64/GOARCH=$${TARGETARCH}/' -i Dockerfile.cross
+	- $(DOCKERCMD) buildx create --name $(IMAGE_NAME)-builder
+	$(DOCKERCMD) buildx use $(IMAGE_NAME)-builder
+	- $(DOCKERCMD) buildx build --push --platform="${PLATFORMS}" --tag ${IMG} -f Dockerfile.cross .
+	- $(DOCKERCMD) buildx rm $(IMAGE_NAME)-builder
+	rm Dockerfile.cross
+else
+	@echo "docker-buildx is supported only with docker"
+endif

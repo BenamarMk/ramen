@@ -1,0 +1,37 @@
+# SPDX-FileCopyrightText: The RamenDR authors
+# SPDX-License-Identifier: Apache-2.0
+
+# Environment for testing rook ceph deployment.
+---
+name: "rook"
+
+templates:
+  - name: "dr-cluster"
+    driver: "$vm"
+    container_runtime: containerd
+    network: "$network"
+    cpus: 4
+    memory: "6g"
+    extra_disks: 1
+    disk_size: "50g"
+    workers:
+      - addons:
+          - name: rook-operator
+          - name: rook-cluster
+          - name: rook-toolbox
+          - name: rook-pool
+          - name: rook-cephfs
+      - addons:
+          - name: external-snapshotter
+          - name: csi-addons
+
+profiles:
+  - name: "dr1"
+    template: "dr-cluster"
+  - name: "dr2"
+    template: "dr-cluster"
+
+workers:
+  - addons:
+      - name: rbd-mirror
+        args: ["dr1", "dr2"]

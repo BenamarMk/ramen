@@ -1,0 +1,20 @@
+#!/bin/sh -e
+
+base=$(dirname $0)
+
+default_network_exists() {
+    virsh -c qemu:///system net-list | grep -q default
+}
+
+create_default_network() {
+    virsh -c qemu:///system net-define $base/network.xml
+    virsh -c qemu:///system net-autostart default
+    virsh -c qemu:///system net-start default
+}
+
+if default_network_exists; then
+    echo "libvirt default network exists"
+else
+    echo "Creating libvirt default network"
+    create_default_network
+fi

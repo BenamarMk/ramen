@@ -6,12 +6,9 @@ package v1alpha1
 import (
 	"time"
 
-	velero "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
-
-// Important: Run "make" to regenerate code after modifying this file
 
 // ReplicationState represents the replication operations to be performed on the volume
 type ReplicationState string
@@ -52,6 +49,12 @@ type VRGAsyncSpec struct {
 	//+optional
 	VolumeSnapshotClassSelector metav1.LabelSelector `json:"volumeSnapshotClassSelector,omitempty"`
 
+	// Label selector to identify the VolumeGroupSnapshotClass resources
+	// that are scanned to select an appropriate VolumeGroupSnapshotClass
+	// for the VolumeGroupSnapshot resource when using VolSync.
+	//+optional
+	VolumeGroupSnapshotClassSelector metav1.LabelSelector `json:"volumeGroupSnapshotClassSelector,omitempty"`
+
 	// scheduling Interval for replicating Persistent Volume
 	// data to a peer cluster. Interval is typically in the
 	// form <num><m,h,d>. Here <num> is a number, 'm' means
@@ -59,10 +62,22 @@ type VRGAsyncSpec struct {
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:Pattern=`^\d+[mhd]$`
 	SchedulingInterval string `json:"schedulingInterval"`
+
+	// PeerClasses is a list of common StorageClasses across the clusters in a policy that have related
+	// sync relationships. This is ONLY modified post creation, if the workload that is protected
+	// creates a PVC using a newer StorageClass that is determined to be common across the peers.
+	//+optional
+	PeerClasses []PeerClass `json:"peerClasses,omitempty"`
 }
 
-// VRGSyncSpec has the parameters associated with MetroDR
-type VRGSyncSpec struct{}
+// VRGSyncSpec has the parameters associated with VE
+type VRGSyncSpec struct {
+	// PeerClasses is a list of common StorageClasses across the clusters in a policy that have related
+	// async relationships. This is ONLY modified post creation, if the workload that is protected
+	// creates a PVC using a newer StorageClass that is determined to be common across the peers.
+	//+optional
+	PeerClasses []PeerClass `json:"peerClasses,omitempty"`
+}
 
 // VolSyncReplicationDestinationSpec defines the configuration for the VolSync
 // protected PVC to be used by the destination cluster (Secondary)
@@ -106,7 +121,38 @@ const (
 	VRGActionRelocate = VRGAction("Relocate")
 )
 
-// NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
+const ReservedBackupName = "use-backup-not-restore"
+
+type KubeObjectProtectionSpec struct {
+	// Preferred time between captures
+	//+optional
+	//+kubebuilder:validation:Format=duration
+	CaptureInterval *metav1.Duration `json:"captureInterval,omitempty"`
+
+	// Name of the Recipe to reference for capture and recovery workflows and volume selection.
+	//+optional
+	RecipeRef *RecipeRef `json:"recipeRef,omitempty"`
+
+	// Recipe parameter definitions
+	//+optional
+	RecipeParameters map[string][]string `json:"recipeParameters,omitempty"`
+
+	// Label selector to identify all the kube objects that need DR protection.
+	// +optional
+	KubeObjectSelector *metav1.LabelSelector `json:"kubeObjectSelector,omitempty"`
+}
+
+type RecipeRef struct {
+	// Name of namespace recipe is in
+	//+optional
+	Namespace string `json:"namespace,omitempty"`
+
+	// Name of recipe
+	//+optional
+	Name string `json:"name,omitempty"`
+}
+
+const KubeObjectProtectionCaptureIntervalDefault = 5 * time.Minute
 
 // VolumeReplicationGroup (VRG) spec declares the desired schedule for data
 // replication and replication state of all PVCs identified via the given
@@ -157,60 +203,58 @@ type VolumeReplicationGroupSpec struct {
 	Action VRGAction `json:"action,omitempty"`
 	//+optional
 	KubeObjectProtection *KubeObjectProtectionSpec `json:"kubeObjectProtection,omitempty"`
+
+	// ProtectedNamespaces is a list of namespaces that are considered for protection by the VRG.
+	// Omitting this field means resources are only protected in the namespace where VRG is.
+	// If this field is set, the VRG must be in the Ramen Ops Namespace as configured in the Ramen Config.
+	// If this field is set, the protected namespace resources are treated as unmanaged.
+	// You can use a recipe to filter and coordinate the order of the resources that are protected.
+	//+optional
+	ProtectedNamespaces *[]string `json:"protectedNamespaces,omitempty"`
 }
 
-type KubeObjectProtectionSpec struct {
-	// Preferred time between captures
-	//+optional
-	//+kubebuilder:validation:Format=duration
-	CaptureInterval *metav1.Duration `json:"captureInterval,omitempty"`
+type Identifier struct {
+	// ID contains the globally unique storage identifier that identifies
+	// the storage or replication backend
+	ID string `json:"id"`
 
+	// Modes is a list of maintenance modes that need to be activated on the storage
+	// backend, prior to various Ramen related orchestration. This is read from the label
+	// "ramendr.openshift.io/maintenancemodes" on the StorageClass or VolumeReplicationClass,
+	// the value for which is a comma separated list of maintenance modes.
 	//+optional
-	CaptureOrder []KubeObjectsCaptureSpec `json:"captureOrder,omitempty"`
-
-	//+optional
-	RecoverOrder []KubeObjectsRecoverSpec `json:"recoverOrder,omitempty"`
+	Modes []MMode `json:"modes,omitempty"`
 }
 
-const KubeObjectProtectionCaptureIntervalDefault = 5 * time.Minute
+// StorageIdentifiers carries various identifiers that help correlate the identify of a storage instance
+// that is backing a PVC across kubernetes clusters.
+type StorageIdentifiers struct {
+	// StorageProvisioners contains the provisioner name of the CSI driver used to provision this
+	// PVC (extracted from the storageClass that was used for provisioning)
+	//+optional
+	StorageProvisioner string `json:"csiProvisioner,omitempty"`
 
-type KubeObjectsCaptureSpec struct {
+	// StorageID contains the globally unique storage identifier, as reported by the storage backend
+	// on the StorageClass as the value for the label "ramendr.openshift.io/storageid", that identifies
+	// the storage backend that was used to provision the volume. It is used to label different StorageClasses
+	// across different kubernetes clusters, that potentially share the same storage backend.
+	// It also contains any maintenance modes that the storage backend requires during vaious Ramen actions
 	//+optional
-	Name            string `json:"name,omitempty"`
-	KubeObjectsSpec `json:",inline"`
-}
+	StorageID Identifier `json:"storageID,omitempty"`
 
-type KubeObjectsRecoverSpec struct {
+	// ReplicationID contains the globally unique replication identifier, as reported by the storage backend
+	// on the VolumeReplicationClass as the value for the label "ramendr.openshift.io/replicationid", that
+	// identifies the storage backends across 2 (or more) storage instances where the volume is replicated
+	// It also contains any maintenance modes that the replication backend requires during vaious Ramen actions
 	//+optional
-	BackupName      string `json:"backupName,omitempty"`
-	KubeObjectsSpec `json:",inline"`
-	//+optional
-	RestoreStatus *velero.RestoreStatusSpec `json:"restoreStatus,omitempty"`
-	//+optional
-	ExistingResourcePolicy velero.PolicyType `json:"existingResourcePolicy,omitempty"`
-}
-
-type KubeObjectsSpec struct {
-	KubeResourcesSpec `json:",inline"`
-	//+optional
-	LabelSelector *metav1.LabelSelector `json:"labelSelector,omitempty"`
-
-	//+optional
-	OrLabelSelectors []*metav1.LabelSelector `json:"orLabelSelectors,omitempty"`
-
-	//+optional
-	IncludeClusterResources *bool `json:"includeClusterResources,omitempty"`
-}
-
-type KubeResourcesSpec struct {
-	//+optional
-	IncludedResources []string `json:"includedResources,omitempty"`
-
-	//+optional
-	ExcludedResources []string `json:"excludedResources,omitempty"`
+	ReplicationID Identifier `json:"replicationID,omitempty"`
 }
 
 type ProtectedPVC struct {
+	// Name of the namespace the PVC is in
+	//+optional
+	Namespace string `json:"namespace,omitempty"`
+
 	// Name of the VolRep/PVC resource
 	//+optional
 	Name string `json:"name,omitempty"`
@@ -219,9 +263,16 @@ type ProtectedPVC struct {
 	//+optional
 	ProtectedByVolSync bool `json:"protectedByVolSync,omitempty"`
 
+	//+optional
+	StorageIdentifiers `json:",inline,omitempty"`
+
 	// Name of the StorageClass required by the claim.
 	//+optional
 	StorageClassName *string `json:"storageClassName,omitempty"`
+
+	// Annotations for the PVC
+	//+optional
+	Annotations map[string]string `json:"annotations,omitempty"`
 
 	// Labels for the PVC
 	//+optional
@@ -233,7 +284,7 @@ type ProtectedPVC struct {
 
 	// Resources set in the claim to be replicated
 	//+optional
-	Resources corev1.ResourceRequirements `json:"resources,omitempty"`
+	Resources corev1.VolumeResourceRequirements `json:"resources,omitempty"`
 
 	// Conditions for this protected pvc
 	//+optional
@@ -243,21 +294,34 @@ type ProtectedPVC struct {
 	// protected in the async or volsync mode
 	//+optional
 	LastSyncTime *metav1.Time `json:"lastSyncTime,omitempty"`
+
+	// Duration of recent synchronization for PVC, if
+	// protected in the async or volsync mode
+	//+optional
+	LastSyncDuration *metav1.Duration `json:"lastSyncDuration,omitempty"`
+
+	// Bytes transferred per sync, if protected in async mode only
+	LastSyncBytes *int64 `json:"lastSyncBytes,omitempty"`
+
+	// VolumeMode describes how a volume is intended to be consumed, either Block or Filesystem.
+	VolumeMode *corev1.PersistentVolumeMode `json:"volumeMode,omitempty"`
 }
 
 type KubeObjectsCaptureIdentifier struct {
 	Number int64 `json:"number"`
 	//+nullable
 	StartTime metav1.Time `json:"startTime,omitempty"`
+	//+nullable
+	EndTime         metav1.Time `json:"endTime,omitempty"`
+	StartGeneration int64       `json:"startGeneration,omitempty"`
 }
 
 type KubeObjectProtectionStatus struct {
-	// +optional
+	//+optional
 	CaptureToRecoverFrom *KubeObjectsCaptureIdentifier `json:"captureToRecoverFrom,omitempty"`
 }
 
 // VolumeReplicationGroupStatus defines the observed state of VolumeReplicationGroup
-// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
 type VolumeReplicationGroupStatus struct {
 	State State `json:"state,omitempty"`
 
@@ -281,6 +345,15 @@ type VolumeReplicationGroupStatus struct {
 	// lastGroupSyncTime is the time of the most recent successful synchronization of all PVCs
 	//+optional
 	LastGroupSyncTime *metav1.Time `json:"lastGroupSyncTime,omitempty"`
+
+	// lastGroupSyncDuration is the max time from all the successful synced PVCs
+	//+optional
+	LastGroupSyncDuration *metav1.Duration `json:"lastGroupSyncDuration,omitempty"`
+
+	// lastGroupSyncBytes is the total bytes transferred from the most recent
+	// successful synchronization of all PVCs
+	//+optional
+	LastGroupSyncBytes *int64 `json:"lastGroupSyncBytes,omitempty"`
 }
 
 // +kubebuilder:object:root=true

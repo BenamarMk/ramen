@@ -1,0 +1,29 @@
+# SPDX-FileCopyrightText: The RamenDR authors
+# SPDX-License-Identifier: Apache-2.0
+
+# Environment for testing kubvirt.
+---
+name: kubevirt
+profiles:
+  - name: kubevirt
+    driver: $vm
+    container_runtime: containerd
+    containerd:
+      plugins:
+        io.containerd.grpc.v1.cri:
+          device_ownership_from_security_context: true
+    network: $network
+    cpus: 8
+    memory: "16g"
+    extra_disks: 1
+    disk_size: "100g"
+    workers:
+      - addons:
+          - name: external-snapshotter
+          - name: rook-operator
+          - name: rook-cluster
+          - name: rook-toolbox
+          - name: rook-pool
+          - name: cdi
+      - addons:
+          - name: kubevirt

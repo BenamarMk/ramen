@@ -1,0 +1,39 @@
+#!/usr/bin/env python3
+
+# SPDX-FileCopyrightText: The RamenDR authors
+# SPDX-License-Identifier: Apache-2.0
+
+import os
+import sys
+
+from drenv import commands
+from drenv import minio
+
+
+def deploy(cluster):
+    print("Deploying velero")
+    s3_url = minio.service_url(cluster)
+    for line in commands.watch(
+        "velero",
+        "install",
+        "--provider=aws",
+        "--image=quay.io/nirsof/velero:v1.14.0",
+        "--plugins=quay.io/nirsof/velero-plugin-for-aws:v1.10.0",
+        "--bucket=bucket",
+        "--secret-file=credentials.conf",
+        "--use-volume-snapshots=false",
+        f"--backup-location-config=region=minio,s3ForcePathStyle=true,s3Url={s3_url}",
+        f"--kubecontext={cluster}",
+        "--wait",
+    ):
+        print(line)
+
+
+if len(sys.argv) != 2:
+    print(f"Usage: {sys.argv[0]} cluster")
+    sys.exit(1)
+
+os.chdir(os.path.dirname(__file__))
+cluster = sys.argv[1]
+
+deploy(cluster)

@@ -1,0 +1,29 @@
+#!/bin/bash -e
+
+# We must run in the test directory.
+cd $(dirname $(dirname $0))
+
+prefix="drenv-selftest-"
+env="envs/vm.yaml"
+
+echo
+echo "1. Activating the ramen virtual environment ..."
+echo
+
+source ../venv
+
+echo
+echo "2. Creating a test cluster ..."
+echo
+
+drenv start --name-prefix $prefix $env "$@"
+
+echo
+echo "3. Deleting the test cluster ..."
+echo
+
+drenv delete --name-prefix $prefix $env "$@"
+
+echo
+echo drenv is set up properly
+echo

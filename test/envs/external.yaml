@@ -1,0 +1,26 @@
+# SPDX-FileCopyrightText: The RamenDR authors
+# SPDX-License-Identifier: Apache-2.0
+
+# Example environment using external clusters. The cluster must exist when this
+# environment is started.
+#
+# To try this example, create the cluster with:
+#
+#     drenv start envs/vm.yaml
+#
+# Now you can start this environment with:
+#
+#     drenv start envs/external.yaml
+#
+# Stopping will run the stop hook, but will not stop the external minikube
+# cluster. Deleting does nothing.
+#
+# https://github.com/RamenDR/ramen/commit/a54bb25dc5cf8882347de1cce8a2318b8b6a58b5
+---
+name: external
+profiles:
+  - name: cluster
+    provider: external
+    workers:
+      - addons:
+          - name: example

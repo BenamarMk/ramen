@@ -1,0 +1,46 @@
+# SPDX-FileCopyrightText: The RamenDR authors
+# SPDX-License-Identifier: Apache-2.0
+
+# Environment for testing volsync deployment.
+---
+name: volsync
+
+templates:
+  - name: hub
+    driver: $vm
+    container_runtime: containerd
+    network: $network
+    memory: 2g
+    workers:
+      - addons:
+          - name: submariner
+            args: [hub, dr1, dr2]
+  - name: cluster
+    driver: $vm
+    container_runtime: containerd
+    network: $network
+    memory: 6g
+    extra_disks: 1
+    disk_size: 50g
+    workers:
+      - addons:
+          - name: rook-operator
+          - name: rook-cluster
+          - name: rook-toolbox
+          - name: rook-pool
+          - name: rook-cephfs
+      - addons:
+          - name: external-snapshotter
+
+profiles:
+  - name: hub
+    template: hub
+  - name: dr1
+    template: cluster
+  - name: dr2
+    template: cluster
+
+workers:
+  - addons:
+      - name: volsync
+        args: [dr1, dr2]

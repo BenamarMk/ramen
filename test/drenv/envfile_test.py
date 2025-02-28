@@ -2,36 +2,48 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import io
+import os
+
 import pytest
+from collections import namedtuple
+
 from . import envfile
 
-valid_yaml = """
+Env = namedtuple("Env", "file,addons_root")
+
+
+@pytest.fixture
+def valid_env(tmpdir):
+    yaml = """
 name: test
+
+ramen:
+  hub: hub
+  clusters: [dr1, dr2]
+  topology: regional-dr
 
 templates:
   - name: dr-cluster
     memory: 6g
-    network: default
     workers:
       # An unnamed worker
-      - scripts:
-          # Script accepting single arguemnt, the profile name
-          - name: script1
-          # Script with user set arguments, $name replaced by current profile
+      - addons:
+          # Addon accepting single arguemnt, the profile name
+          - name: addon1
+          # Addon with user set arguments, $name replaced by current profile
           # name.
-          - name: script2
+          - name: addon2
             args: ["$name", "hub"]
       # A named worker
       - name: named-worker
-        scripts:
-          - name: script3
+        addons:
+          - name: addon3
   - name: hub-cluster
     memory: 4g
-    network: default
     workers:
-      - scripts:
-          # Script that does not need its profile name.
-          - name: script4
+      - addons:
+          # Addon that does not need its profile name.
+          - name: addon4
             args: ["dr1", "dr2"]
 
 profiles:
@@ -41,38 +53,93 @@ profiles:
     memory: 8g
   - name: dr2
     template: dr-cluster
+    # These are specific values and will be propagated to minikube as is.
+    driver: myhypervisor
+    network: mynetwork
   - name: hub
+    external: true
     template: hub-cluster
+    # Using driver and network from platform defaults
+    driver: $container
+    network: $network
+  - name: dr3
+    template: dr-cluster
+    # Using driver from platform defaults
+    driver: $vm
 
 workers:
   - name: named-worker
-    scripts:
-      # Script accepting third argument which is not a cluster name.
-      - name: script5
+    addons:
+      # Addon accepting third argument which is not a cluster name.
+      - name: addon5
         args: ["dr1", "dr2", "other"]
-  - scripts:
-      # Script accepting no arguments
-      - name: script6
+  - addons:
+      # Addon accepting no arguments
+      - name: addon6
         args: []
 """
 
+    for i in range(1, 7):
+        tmpdir.mkdir(f"addon{i}")
 
-def test_valid():
-    f = io.StringIO(valid_yaml)
-    env = envfile.load(f)
+    return Env(file=io.StringIO(yaml), addons_root=str(tmpdir))
+
+
+def test_driver(valid_env):
+    env = envfile.load(valid_env.file, addons_root=valid_env.addons_root)
+    platform_defaults = envfile.platform_defaults()
+    machine = os.uname().machine
+
+    # no driver
+    profile = env["profiles"][0]
+    assert profile["driver"] == platform_defaults[envfile.VM][machine]
+
+    # concrete driver
+    profile = env["profiles"][1]
+    assert profile["driver"] == "myhypervisor"
+
+    # platform container driver
+    profile = env["profiles"][2]
+    assert profile["driver"] == platform_defaults[envfile.CONTAINER]
+
+    # platform vm driver
+    profile = env["profiles"][3]
+    assert profile["driver"] == platform_defaults[envfile.VM][machine]
+
+
+def test_network(valid_env):
+    env = envfile.load(valid_env.file, addons_root=valid_env.addons_root)
+    platform_defaults = envfile.platform_defaults()
+    machine = os.uname().machine
+
+    # no network
+    profile = env["profiles"][0]
+    assert profile["network"] == ""
+
+    # concrete network
+    profile = env["profiles"][1]
+    assert profile["network"] == "mynetwork"
+
+    # platform drenv-shared network
+    profile = env["profiles"][2]
+    assert profile["network"] == platform_defaults[envfile.SHARED_NETWORK][machine]
+
+
+def test_valid(valid_env):
+    env = envfile.load(valid_env.file, addons_root=valid_env.addons_root)
 
     # profile dr1
 
     profile = env["profiles"][0]
     assert profile["name"] == "dr1"
-    assert profile["network"] == "default"  # From template
+    assert not profile["external"]
     assert profile["memory"] == "8g"  # From profile
     assert profile["cpus"] == 2  # From defaults
 
     worker = profile["workers"][0]
     assert worker["name"] == "dr1/0"
-    assert worker["scripts"][0]["args"] == ["dr1"]
-    assert worker["scripts"][1]["args"] == ["dr1", "hub"]
+    assert worker["addons"][0]["args"] == ["dr1"]
+    assert worker["addons"][1]["args"] == ["dr1", "hub"]
 
     worker = profile["workers"][1]
     assert worker["name"] == "dr1/named-worker"
@@ -85,8 +152,8 @@ def test_valid():
 
     worker = profile["workers"][0]
     assert worker["name"] == "dr2/0"
-    assert worker["scripts"][0]["args"] == ["dr2"]
-    assert worker["scripts"][1]["args"] == ["dr2", "hub"]
+    assert worker["addons"][0]["args"] == ["dr2"]
+    assert worker["addons"][1]["args"] == ["dr2", "hub"]
 
     worker = profile["workers"][1]
     assert worker["name"] == "dr2/named-worker"
@@ -95,30 +162,42 @@ def test_valid():
 
     profile = env["profiles"][2]
     assert profile["name"] == "hub"
+    assert profile["external"]
     assert profile["memory"] == "4g"  # From template
 
     worker = profile["workers"][0]
     assert worker["name"] == "hub/0"
-    assert worker["scripts"][0]["args"] == ["dr1", "dr2"]
+    assert worker["addons"][0]["args"] == ["dr1", "dr2"]
 
     # env workers
 
     worker = env["workers"][0]
     assert worker["name"] == "test/named-worker"
-    assert worker["scripts"][0]["args"] == ["dr1", "dr2", "other"]
+    assert worker["addons"][0]["args"] == ["dr1", "dr2", "other"]
 
     worker = env["workers"][1]
     assert worker["name"] == "test/1"
-    assert worker["scripts"][0]["args"] == []
+    assert worker["addons"][0]["args"] == []
 
 
-def test_name_prefix():
-    f = io.StringIO(valid_yaml)
-    env = envfile.load(f, name_prefix="prefix-")
+def test_name_prefix(valid_env):
+    env = envfile.load(
+        valid_env.file,
+        name_prefix="prefix-",
+        addons_root=valid_env.addons_root,
+    )
 
     # env
 
     assert env["name"] == "prefix-test"
+
+    # ramen info
+
+    assert env["ramen"] == {
+        "hub": "prefix-hub",
+        "clusters": ["prefix-dr1", "prefix-dr2"],
+        "topology": "regional-dr",
+    }
 
     # profile dr1
 
@@ -127,8 +206,8 @@ def test_name_prefix():
 
     worker = profile["workers"][0]
     assert worker["name"] == "prefix-dr1/0"
-    assert worker["scripts"][0]["args"] == ["prefix-dr1"]
-    assert worker["scripts"][1]["args"] == ["prefix-dr1", "prefix-hub"]
+    assert worker["addons"][0]["args"] == ["prefix-dr1"]
+    assert worker["addons"][1]["args"] == ["prefix-dr1", "prefix-hub"]
 
     worker = profile["workers"][1]
     assert worker["name"] == "prefix-dr1/named-worker"
@@ -140,8 +219,8 @@ def test_name_prefix():
 
     worker = profile["workers"][0]
     assert worker["name"] == "prefix-dr2/0"
-    assert worker["scripts"][0]["args"] == ["prefix-dr2"]
-    assert worker["scripts"][1]["args"] == ["prefix-dr2", "prefix-hub"]
+    assert worker["addons"][0]["args"] == ["prefix-dr2"]
+    assert worker["addons"][1]["args"] == ["prefix-dr2", "prefix-hub"]
 
     worker = profile["workers"][1]
     assert worker["name"] == "prefix-dr2/named-worker"
@@ -153,13 +232,13 @@ def test_name_prefix():
 
     worker = profile["workers"][0]
     assert worker["name"] == "prefix-hub/0"
-    assert worker["scripts"][0]["args"] == ["prefix-dr1", "prefix-dr2"]
+    assert worker["addons"][0]["args"] == ["prefix-dr1", "prefix-dr2"]
 
     # env workers
 
     worker = env["workers"][0]
     assert worker["name"] == "prefix-test/named-worker"
-    assert worker["scripts"][0]["args"] == [
+    assert worker["addons"][0]["args"] == [
         "prefix-dr1",
         "prefix-dr2",
         "other",
@@ -167,7 +246,33 @@ def test_name_prefix():
 
     worker = env["workers"][1]
     assert worker["name"] == "prefix-test/1"
-    assert worker["scripts"][0]["args"] == []
+    assert worker["addons"][0]["args"] == []
+
+
+def test_missing_profile_addons(tmpdir):
+    s = """
+name: test
+profiles:
+  - name: dr1
+    workers:
+      - addons:
+          - name: addon
+"""
+    with pytest.raises(envfile.MissingAddon):
+        envfile.load(io.StringIO(s), addons_root=str(tmpdir))
+
+
+def test_missing_global_addons(tmpdir):
+    s = """
+name: test
+profiles:
+  - name: dr1
+workers:
+  - addons:
+      - name: missing
+"""
+    with pytest.raises(envfile.MissingAddon):
+        envfile.load(io.StringIO(s), addons_root=str(tmpdir))
 
 
 def test_require_env_name():
@@ -218,26 +323,26 @@ profiles:
         envfile.load(io.StringIO(s))
 
 
-def test_require_profile_script_name():
+def test_require_profile_addon_name():
     s = """
 name: test
 profiles:
   - name: p1
     workers:
-      - scripts:
+      - addons:
           - args: ["arg1"]
 """
     with pytest.raises(ValueError):
         envfile.load(io.StringIO(s))
 
 
-def test_require_env_script_name():
+def test_require_env_addon_name():
     s = """
 name: test
 profiles:
   - name: p1
 workers:
-  - scripts:
+  - addons:
       - args: ["arg1"]
 """
     with pytest.raises(ValueError):

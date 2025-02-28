@@ -1,0 +1,92 @@
+#!/usr/bin/env python3
+
+# SPDX-FileCopyrightText: The RamenDR authors
+# SPDX-License-Identifier: Apache-2.0
+
+import os
+import shutil
+import sys
+import time
+
+from drenv import kubectl
+from drenv import virtctl
+
+NAMESPACE = "kubevirt-test"
+
+
+def test(cluster):
+    copy_public_key()
+    create_vm(cluster)
+    wait_until_vm_is_ready(cluster)
+    verify_ssh(cluster)
+    delete_vm(cluster)
+
+
+def copy_public_key():
+    src = os.path.expanduser("~/.ssh/id_rsa.pub")
+    dst = "vm/id_rsa.pub"
+    print(f"Copying public key from {src} to {dst}")
+    shutil.copyfile(src, dst)
+
+
+def create_vm(cluster):
+    print(f"Deploying test vm in namespace '{NAMESPACE}'")
+    kubectl.apply("--kustomize=vm", context=cluster)
+
+
+def wait_until_vm_is_ready(cluster):
+    print("Waiting until test vm is ready")
+    kubectl.wait(
+        "vm/testvm",
+        "--for=condition=ready",
+        f"--namespace={NAMESPACE}",
+        "--timeout=180s",
+        context=cluster,
+    )
+
+
+def delete_vm(cluster):
+    print(f"Deleting test vm in namespace '{NAMESPACE}'")
+    kubectl.delete("--kustomize=vm", context=cluster)
+
+
+def verify_ssh(cluster):
+    """
+    Verify that we can run commands via ssh.
+    """
+    delay = 5
+
+    # When running in a vm in the blr lab we need 16 retires. Locally the
+    # second attempt succeeds.
+    retries = 30
+
+    for i in range(retries):
+        time.sleep(delay)
+        print(f"Last entries in /var/log/ramen.log (attempt {i + 1}/{retries})")
+        try:
+            out = virtctl.ssh(
+                "testvm",
+                "tail -6 /var/log/ramen.log",
+                username="cirros",
+                namespace=NAMESPACE,
+                known_hosts="",  # Skip host key verification.
+                context=cluster,
+            )
+        except Exception as e:
+            print(f"{e}")
+            print(f"Retrying in {delay} seconds...")
+        else:
+            print(out)
+            break
+    else:
+        raise RuntimeError("Failed to connect to VM via ssh")
+
+
+if len(sys.argv) != 2:
+    print(f"Usage: {sys.argv[0]} cluster")
+    sys.exit(1)
+
+os.chdir(os.path.dirname(__file__))
+cluster = sys.argv[1]
+
+test(cluster)

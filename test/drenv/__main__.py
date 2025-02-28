@@ -3,51 +3,260 @@
 
 import argparse
 import concurrent.futures
+import json
 import logging
 import os
 import shutil
-import subprocess
+import signal
 import sys
 import time
 
-from collections import deque
-
-import yaml
+from functools import partial
 
 import drenv
+from . import cache
+from . import cluster
+from . import commands
 from . import envfile
+from . import kubectl
+from . import providers
+from . import ramen
+from . import shutdown
+from . import yaml
 
-CMD_PREFIX = "cmd_"
+ADDONS_DIR = "addons"
+
+executors = []
 
 
 def main():
-    commands = [n[len(CMD_PREFIX) :] for n in globals() if n.startswith(CMD_PREFIX)]
-
-    p = argparse.ArgumentParser(prog="drenv")
-    p.add_argument("-v", "--verbose", action="store_true", help="Be more verbose")
-    p.add_argument("command", choices=commands, help="Command to run")
-    p.add_argument("--name-prefix", help="Prefix profile names")
-    p.add_argument("filename", help="Environment filename")
-    args = p.parse_args()
-
+    args = parse_args()
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(asctime)s %(levelname)-7s %(message)s",
     )
 
+    signal.signal(signal.SIGTERM, handle_termination_signal)
+    become_process_group_leader()
+    try:
+        args.func(args)
+    except Exception:
+        logging.exception("Command failed")
+        sys.exit(1)
+    finally:
+        shutdown_executors()
+        terminate_process_group()
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(prog="drenv")
+
+    sp = parser.add_subparsers(
+        title="commands",
+        dest="command",
+        required=True,
+    )
+
+    p = add_command(sp, "start", do_start, help="start an environment")
+    p.add_argument(
+        "--skip-tests",
+        dest="run_tests",
+        action="store_false",
+        help="Do not run addons 'test' hooks",
+    )
+    p.add_argument(
+        "--skip-addons",
+        dest="run_addons",
+        action="store_false",
+        help="Do not run addons 'start' hooks",
+    )
+    p.add_argument(
+        "--max-workers",
+        type=int,
+        metavar="N",
+        help="maximum number of workers per profile",
+    )
+    p.add_argument(
+        "--timeout",
+        type=int,
+        help="time in seconds to wait until clsuter is started",
+    )
+
+    p = add_command(sp, "stop", do_stop, help="stop an environment")
+    p.add_argument(
+        "--skip-addons",
+        dest="run_addons",
+        action="store_false",
+        help="Do not run addons 'stop' hooks",
+    )
+
+    p = add_command(sp, "cache", do_cache, help="cache environment resources")
+    p.add_argument(
+        "--max-workers",
+        type=int,
+        metavar="N",
+        help="maximum number of workers per profile",
+    )
+
+    p = add_command(sp, "gather", do_gather, help="gather environment data")
+    p.add_argument(
+        "-d",
+        "--directory",
+        help='directory for storing gathered data (default "gather.{timestamp}")',
+    )
+    p.add_argument(
+        "-n",
+        "--namespaces",
+        type=lambda s: s.split(","),
+        help="if specified, comma separated list of namespaces to gather data from",
+    )
+
+    p = add_command(sp, "load", do_load, help="load an image into the cluster")
+    p.add_argument(
+        "--image",
+        required=True,
+        help="image to load into the cluster in tar format",
+    )
+
+    add_command(sp, "delete", do_delete, help="delete an environment")
+    add_command(sp, "suspend", do_suspend, help="suspend virtual machines")
+    add_command(sp, "resume", do_resume, help="resume virtual machines")
+    add_command(sp, "dump", do_dump, help="dump an environment yaml")
+
+    add_command(sp, "clear", do_clear, help="cleared cached resources", envfile=False)
+    add_command(sp, "setup", do_setup, help="setup host for drenv")
+    add_command(sp, "cleanup", do_cleanup, help="cleanup host")
+
+    return parser.parse_args()
+
+
+def add_command(sp, name, func, help=None, envfile=True):
+    parser = sp.add_parser(name, help=help)
+    parser.add_argument("-v", "--verbose", action="store_true", help="be more verbose")
+    parser.set_defaults(func=func)
+    if envfile:
+        parser.add_argument(
+            "--name-prefix",
+            metavar="PREFIX",
+            help="prefix profile names",
+        )
+        parser.add_argument("filename", help="path to environment file")
+    return parser
+
+
+def load_env(args):
     with open(args.filename) as f:
-        env = envfile.load(f, name_prefix=args.name_prefix)
-
-    func = globals()[CMD_PREFIX + args.command]
-    func(env)
+        return envfile.load(f, name_prefix=args.name_prefix)
 
 
-def cmd_start(env):
+def shutdown_executors():
+    # Prevents adding new executors, starting new child processes, and aborts
+    # running workers.
+    shutdown.start()
+
+    # Cancels pending tasks and prevent submission of new tasks. This does not
+    # affect running tasks, they will be aborted when they check shutdown
+    # status, or when the child process terminates.
+    for name, executor in executors:
+        logging.debug("[main] Shutting down executor %s", name)
+        executor.shutdown(wait=False, cancel_futures=True)
+
+
+def add_executor(name, executor):
+    with shutdown.guard():
+        logging.debug("[main] Add executor %s", name)
+        executors.append((name, executor))
+
+
+def become_process_group_leader():
+    """
+    To allow cleaning up after errors, ensure that we are a process group
+    leader, so we can terminate the process group during shutdown.
+    """
+    if os.getpid() != os.getpgid(0):
+        os.setpgid(0, 0)
+        logging.debug("[main] Created new process group %s", os.getpgid(0))
+
+
+def terminate_process_group():
+    """
+    Terminate all child processes and child processes created by them.
+    """
+    logging.debug("[main] Terminating process group %s", os.getpid())
+    signal.signal(signal.SIGHUP, signal.SIG_IGN)
+    os.killpg(0, signal.SIGHUP)
+
+
+def handle_termination_signal(signo, frame):
+    logging.info("[main] Terminated by signal %s", signo)
+    sys.exit(1)
+
+
+def do_setup(args):
+    env = load_env(args)
+    for name in set(p["provider"] for p in env["profiles"]):
+        logging.info("[main] Setting up '%s' for drenv", name)
+        provider = providers.get(name)
+        provider.setup()
+
+
+def do_cleanup(args):
+    env = load_env(args)
+    for name in set(p["provider"] for p in env["profiles"]):
+        logging.info("[main] Cleaning up '%s' for drenv", name)
+        provider = providers.get(name)
+        provider.cleanup()
+
+
+def do_clear(args):
+    logging.info("[main] Clearing cache")
+    cache.clear()
+
+
+def do_cache(args):
+    env = load_env(args)
+    start = time.monotonic()
+    logging.info("[%s] Refreshing cached addons", env["name"])
+    addons = collect_addons(env)
+    execute(
+        cache_addon,
+        addons,
+        "cache",
+        max_workers=args.max_workers,
+        ctx=env["name"],
+    )
+    logging.info(
+        "[%s] Cached addons refreshed in %.2f seconds",
+        env["name"],
+        time.monotonic() - start,
+    )
+
+
+def do_start(args):
+    env = load_env(args)
     start = time.monotonic()
     logging.info("[%s] Starting environment", env["name"])
-    # Delaying `minikube start` ensures cluster start order.
-    execute(start_cluster, env["profiles"], delay=1)
-    execute(run_worker, env["workers"])
+
+    hooks = []
+    if args.run_addons:
+        hooks.append("start")
+    if args.run_tests:
+        hooks.append("test")
+
+    execute(
+        start_cluster,
+        env["profiles"],
+        "profiles",
+        hooks=hooks,
+        args=args,
+    )
+
+    if hooks:
+        execute(run_worker, env["workers"], "workers", hooks=hooks)
+
+    if "ramen" in env:
+        ramen.dump_e2e_config(env)
+
     logging.info(
         "[%s] Environment started in %.2f seconds",
         env["name"],
@@ -55,10 +264,12 @@ def cmd_start(env):
     )
 
 
-def cmd_stop(env):
+def do_stop(args):
+    env = load_env(args)
     start = time.monotonic()
     logging.info("[%s] Stopping environment", env["name"])
-    execute(stop_cluster, env["profiles"])
+    hooks = ["stop"] if args.run_addons else []
+    execute(stop_cluster, env["profiles"], "profiles", hooks=hooks)
     logging.info(
         "[%s] Environment stopped in %.2f seconds",
         env["name"],
@@ -66,10 +277,35 @@ def cmd_stop(env):
     )
 
 
-def cmd_delete(env):
+def do_gather(args):
+    env = load_env(args)
+    start = time.monotonic()
+    logging.info("[%s] Gathering environment", env["name"])
+    kubectl.gather(
+        [p["name"] for p in env["profiles"]],
+        directory=args.directory,
+        namespaces=args.namespaces,
+        name=env["name"],
+        verbose=args.verbose,
+    )
+    logging.info(
+        "[%s] Environment gathered in %.2f seconds",
+        env["name"],
+        time.monotonic() - start,
+    )
+
+
+def do_delete(args):
+    env = load_env(args)
     start = time.monotonic()
     logging.info("[%s] Deleting environment", env["name"])
-    execute(delete_cluster, env["profiles"])
+    execute(delete_cluster, env["profiles"], "profiles")
+
+    env_config = drenv.config_dir(env["name"])
+    if os.path.exists(env_config):
+        logging.info("[%s] Removing config %s", env["name"], env_config)
+        shutil.rmtree(env_config)
+
     logging.info(
         "[%s] Environment deleted in %.2f seconds",
         env["name"],
@@ -77,196 +313,240 @@ def cmd_delete(env):
     )
 
 
-def cmd_dump(env):
+def do_load(args):
+    env = load_env(args)
+    start = time.monotonic()
+    logging.info("[%s] Loading image '%s'", env["name"], args.image)
+    execute(load_image, env["profiles"], "profiles", image=args.image)
+    logging.info(
+        "[%s] Image loaded in %.2f seconds",
+        env["name"],
+        time.monotonic() - start,
+    )
+
+
+def do_suspend(args):
+    env = load_env(args)
+    logging.info("[%s] Suspending environment", env["name"])
+    for profile in env["profiles"]:
+        provider = providers.get(profile["provider"])
+        provider.suspend(profile)
+
+
+def do_resume(args):
+    env = load_env(args)
+    logging.info("[%s] Resuming environment", env["name"])
+    for profile in env["profiles"]:
+        provider = providers.get(profile["provider"])
+        provider.resume(profile)
+
+
+def do_dump(args):
+    env = load_env(args)
     yaml.dump(env, sys.stdout)
 
 
-def execute(func, profiles, delay=0):
-    failed = False
+def execute(func, profiles, name, max_workers=None, **options):
+    """
+    Execute func in parallel for every profile.
 
-    with concurrent.futures.ThreadPoolExecutor() as e:
+    func is invoked with profile and **options. It must have this signature:
+
+        def func(profile, **options):
+
+    """
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
+    try:
+        add_executor(name, executor)
         futures = {}
-
         for p in profiles:
-            futures[e.submit(func, p)] = p["name"]
-            time.sleep(delay)
+            futures[executor.submit(func, p, **options)] = p["name"]
 
         for f in concurrent.futures.as_completed(futures):
-            try:
-                f.result()
-            except Exception:
-                logging.exception("[%s] Cluster failed", futures[f])
-                failed = True
-
-    if failed:
-        sys.exit(1)
+            # If the future failed, stop waiting for the rest of the futures
+            # and let the error propagate to the top level error handler.
+            f.result()
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
 
 
-def start_cluster(profile):
-    start = time.monotonic()
-    logging.info("[%s] Starting cluster", profile["name"])
-
-    is_restart = drenv.cluster_info(profile["name"]) != {}
-
-    minikube(
-        "start",
-        "--driver",
-        "kvm2",
-        "--container-runtime",
-        profile["container_runtime"],
-        "--extra-disks",
-        str(profile["extra_disks"]),
-        "--disk-size",
-        profile["disk_size"],
-        "--network",
-        profile["network"],
-        "--nodes",
-        str(profile["nodes"]),
-        "--cni",
-        profile["cni"],
-        "--cpus",
-        str(profile["cpus"]),
-        "--memory",
-        profile["memory"],
-        "--addons",
-        ",".join(profile["addons"]),
-        profile=profile["name"],
-    )
-
-    logging.info(
-        "[%s] Cluster started in %.2f seconds",
-        profile["name"],
-        time.monotonic() - start,
-    )
-
-    if is_restart:
-        wait_for_deployments(profile)
-
-    execute(run_worker, profile["workers"])
+def collect_addons(env):
+    found = {}
+    for profile in env["profiles"]:
+        for worker in profile["workers"]:
+            for addon in worker["addons"]:
+                found[addon["name"]] = addon
+    for worker in env["workers"]:
+        for addon in worker["addons"]:
+            found[addon["name"]] = addon
+    return found.values()
 
 
-def stop_cluster(profile):
-    start = time.monotonic()
-    logging.info("[%s] Stopping cluster", profile["name"])
-    minikube("stop", profile=profile["name"])
-    logging.info(
-        "[%s] Cluster stopped in %.2f seconds",
-        profile["name"],
-        time.monotonic() - start,
-    )
+def start_cluster(profile, hooks=(), args=None, **options):
+    provider = providers.get(profile["provider"])
+    existing = provider.exists(profile)
+
+    provider.start(profile, verbose=args.verbose, timeout=args.timeout)
+    provider.configure(profile, existing=existing)
+
+    if existing:
+        restart_failed_deployments(profile)
+
+    if hooks:
+        execute(
+            run_worker,
+            profile["workers"],
+            profile["name"],
+            max_workers=args.max_workers,
+            hooks=hooks,
+        )
 
 
-def delete_cluster(profile):
-    start = time.monotonic()
-    logging.info("[%s] Deleting cluster", profile["name"])
-    minikube("delete", profile=profile["name"])
+def stop_cluster(profile, hooks=(), **options):
+    cluster_status = cluster.status(profile["name"])
+
+    if cluster_status == cluster.READY and hooks:
+        execute(
+            run_worker,
+            profile["workers"],
+            profile["name"],
+            hooks=hooks,
+            reverse=True,
+            allow_failure=True,
+        )
+
+    if cluster_status != cluster.UNKNOWN:
+        provider = providers.get(profile["provider"])
+        provider.stop(profile)
+
+
+def delete_cluster(profile, **options):
+    provider = providers.get(profile["provider"])
+    provider.delete(profile)
+
     profile_config = drenv.config_dir(profile["name"])
     if os.path.exists(profile_config):
         logging.info("[%s] Removing config %s", profile["name"], profile_config)
         shutil.rmtree(profile_config)
-    logging.info(
-        "[%s] Cluster deleted in %.2f seconds",
-        profile["name"],
-        time.monotonic() - start,
-    )
 
 
-def wait_for_deployments(profile, initial_wait=30, timeout=300):
+def load_image(profile, image=None, **options):
+    provider = providers.get(profile["provider"])
+    provider.load(profile, image)
+
+
+def restart_failed_deployments(profile):
     """
-    When restarting, kubectl can report stale status for a while, before it
-    starts to report real status. Then it takes a while until all deployments
-    become available.
-
-    We first sleep for initial_wait seconds, to give Kubernetes chance to fail
-    liveness and readiness checks, and then wait until all deployments are
-    available or the timeout has expired.
-
-    TODO: Check if there is more reliable way to wait for actual status.
+    When restarting after failure, some deployment may enter failing state.
+    This is not handled by the addons. Restarting the deployment solves this
+    issue. This may also be solved at the addon level.
     """
-    start = time.monotonic()
-    logging.info(
-        "[%s] Waiting until all deployments are available",
-        profile["name"],
+    logging.info("[%s] Looking up failed deployments", profile["name"])
+    debug = partial(logging.debug, f"[{profile['name']}] %s")
+
+    for namespace, deploy, progressing in failed_deployments(profile):
+        logging.info(
+            "[%s] Restarting failed deployment '%s': %s",
+            profile["name"],
+            deploy,
+            progressing["message"],
+        )
+        kubectl.rollout(
+            "restart",
+            deploy,
+            f"--namespace={namespace}",
+            context=profile["name"],
+            log=debug,
+        )
+
+
+def failed_deployments(profile):
+    out = kubectl.get(
+        "namespace",
+        "--output=jsonpath={.items[*].metadata.name}",
+        context=profile["name"],
     )
-
-    time.sleep(initial_wait)
-
-    kubectl(
-        "wait",
-        "deploy",
-        "--all",
-        "--for",
-        "condition=available",
-        "--all-namespaces",
-        "--timeout",
-        f"{timeout}s",
-        profile=profile["name"],
-    )
-
-    logging.info(
-        "[%s] Deployments are available in %.2f seconds",
-        profile["name"],
-        time.monotonic() - start,
-    )
+    for namespace in out.split():
+        names = kubectl.get(
+            "deploy",
+            f"--namespace={namespace}",
+            "--output=name",
+            context=profile["name"],
+        )
+        for deploy in names.splitlines():
+            out = kubectl.get(
+                deploy,
+                f"--namespace={namespace}",
+                "--output=jsonpath={.status.conditions[?(@.type=='Progressing')]}",
+                context=profile["name"],
+            )
+            progressing = json.loads(out)
+            if progressing["status"] == "False":
+                yield namespace, deploy, progressing
 
 
-def kubectl(cmd, *args, profile=None):
-    minikube("kubectl", "--", cmd, *args, profile=profile)
+def run_worker(worker, hooks=(), reverse=False, allow_failure=False):
+    addons = reversed(worker["addons"]) if reverse else worker["addons"]
+    for addon in addons:
+        run_addon(addon, worker["name"], hooks=hooks, allow_failure=allow_failure)
 
 
-def minikube(cmd, *args, profile=None):
-    run("minikube", cmd, "--profile", profile, *args, name=profile)
+def cache_addon(addon, ctx="global"):
+    addon_dir = os.path.join(ADDONS_DIR, addon["name"])
+    if not os.path.isdir(addon_dir):
+        skip_addon(addon, ctx)
+        return
+
+    hook = os.path.join(addon_dir, "cache")
+    if os.path.isfile(hook):
+        run_hook(hook, (), ctx)
 
 
-def run_worker(worker):
-    for script in worker["scripts"]:
-        run_script(script, worker["name"])
+def run_addon(addon, name, hooks=(), allow_failure=False):
+    addon_dir = os.path.join(ADDONS_DIR, addon["name"])
+    if not os.path.isdir(addon_dir):
+        skip_addon(addon, name)
+        return
 
-
-def run_script(script, name):
-    for filename in "start", "test":
-        hook = os.path.join(script["name"], filename)
+    for filename in hooks:
+        hook = os.path.join(addon_dir, filename)
         if os.path.isfile(hook):
-            run_hook(hook, script["args"], name)
+            run_hook(hook, addon["args"], name, allow_failure=allow_failure)
 
 
-def run_hook(hook, args, name):
+def skip_addon(addon, ctx):
+    logging.warning(
+        "[%s] Addon '%s' does not exist - skipping",
+        ctx,
+        addon["name"],
+    )
+
+
+def run_hook(hook, args, name, allow_failure=False):
+    if shutdown.started():
+        logging.debug("[%s] Shutting down", name)
+        raise shutdown.Started
+
     start = time.monotonic()
     logging.info("[%s] Running %s", name, hook)
-    run(hook, *args, name=name)
-    logging.info(
-        "[%s] %s completed in %.2f seconds", name, hook, time.monotonic() - start
-    )
+    try:
+        run(hook, *args, name=name)
+    except Exception as e:
+        if not allow_failure:
+            raise
+        logging.warning("[%s] %s failed: %s", name, hook, e)
+    else:
+        logging.info(
+            "[%s] %s completed in %.2f seconds",
+            name,
+            hook,
+            time.monotonic() - start,
+        )
 
 
 def run(*cmd, name=None):
-    # Avoid delays in child process logs.
-    env = dict(os.environ)
-    env["PYTHONUNBUFFERED"] = "1"
-
-    p = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        env=env,
-    )
-
-    messages = deque(maxlen=20)
-
-    for line in iter(p.stdout.readline, b""):
-        msg = line.decode().rstrip()
-        messages.append(msg)
-        logging.debug("[%s] %s", name, msg)
-
-    p.wait()
-    if p.returncode != 0:
-        last_messages = "\n".join("  " + m for m in messages)
-        raise RuntimeError(
-            f"[{name}] Command {cmd} failed rc={p.returncode}\n"
-            "\n"
-            "Last messages:\n"
-            f"{last_messages}"
-        )
+    for line in commands.watch(*cmd):
+        logging.debug("[%s] %s", name, line)
 
 
 if __name__ == "__main__":
