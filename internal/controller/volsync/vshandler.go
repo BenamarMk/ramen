@@ -2655,7 +2655,7 @@ func (v *VSHandler) IsVRGInAdminNamespace() bool {
 }
 
 func (v *VSHandler) UnprotectVolSyncPVC(pvc *corev1.PersistentVolumeClaim) error {
-	v.log.Info("Unprotecting VolSync PVC", "pvcName", pvc.GetName(), "pvcNamespace", pvc.GetNamespace())
+	v.log.Info("Unprotecting VolSync PVC")
 
 	err := v.DeleteRS(pvc.GetName(), pvc.GetNamespace())
 	if err != nil {
