@@ -28,6 +28,8 @@ const (
 
 	IsCGEnabledAnnotation = "drplacementcontrol.ramendr.openshift.io/is-cg-enabled"
 
+	ConsistencyGroupLabel = "ramendr.openshift.io/consistency-group"
+
 	// When this annotation is set to true, VolSync will protect RBD PVCs.
 	UseVolSyncAnnotation = "drplacementcontrol.ramendr.openshift.io/use-volsync-for-pvc-protection"
 

@@ -614,7 +614,7 @@ func (v *VRGInstance) reconcileMissingVGR(vrNamespacedName types.NamespacedName,
 }
 
 func (v *VRGInstance) isCGEnabled(pvc *corev1.PersistentVolumeClaim) (string, bool) {
-	cg, ok := pvc.GetLabels()[ConsistencyGroupLabel]
+	cg, ok := pvc.GetLabels()[rmnutil.ConsistencyGroupLabel]
 
 	return cg, ok && rmnutil.IsCGEnabled(v.instance.GetAnnotations())
 }
@@ -761,13 +761,13 @@ func (v *VRGInstance) createVGR(vrNamespacedName types.NamespacedName,
 			v.instance.Name, err)
 	}
 
-	cg, ok := pvcs[0].GetLabels()[ConsistencyGroupLabel]
+	cg, ok := pvcs[0].GetLabels()[rmnutil.ConsistencyGroupLabel]
 	if !ok {
 		return fmt.Errorf("failed to create VolumeGroupReplication (%s/%s) %w",
 			vrNamespacedName.Namespace, vrNamespacedName.Name, err)
 	}
 
-	selector := metav1.AddLabelToSelector(&v.recipeElements.PvcSelector.LabelSelector, ConsistencyGroupLabel, cg)
+	selector := metav1.AddLabelToSelector(&v.recipeElements.PvcSelector.LabelSelector, rmnutil.ConsistencyGroupLabel, cg)
 
 	volRep := &volrep.VolumeGroupReplication{
 		ObjectMeta: metav1.ObjectMeta{
