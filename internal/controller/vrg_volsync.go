@@ -215,7 +215,7 @@ func (v *VRGInstance) reconcilePVCAsVolSyncPrimary(pvc corev1.PersistentVolumeCl
 		)
 
 		rgs, finalSyncComplete, err := cephfsCGHandler.CreateOrUpdateReplicationGroupSource(
-			v.instance.Name, pvc.Namespace, v.instance.Spec.RunFinalSync,
+			pvc.Namespace, v.instance.Spec.RunFinalSync,
 		)
 		if err != nil {
 			setVRGConditionTypeVolSyncRepSourceSetupError(&protectedPVC.Conditions, v.instance.Generation,
@@ -425,7 +425,7 @@ func (v *VRGInstance) createOrUpdateReplicationDestinations(
 		}
 
 		replicationGroupDestination, err := cephfsCGHandler.CreateOrUpdateReplicationGroupDestination(
-			v.instance.Name, namespace, groups[groupKey],
+			namespace, groups[groupKey],
 		)
 		if err != nil {
 			v.log.Error(err, "Failed to create ReplicationGroupDestination")

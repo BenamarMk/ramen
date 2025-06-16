@@ -44,7 +44,7 @@ var _ = Describe("Cghandler", func() {
 					Async: &ramendrv1alpha1.VRGAsyncSpec{},
 				},
 			}, nil, nil, "0", testLogger)
-			rgd, err := vsCGHandler.CreateOrUpdateReplicationGroupDestination(vgdName, "default", nil)
+			rgd, err := vsCGHandler.CreateOrUpdateReplicationGroupDestination("default", nil)
 			Expect(err).To(BeNil())
 			Expect(len(rgd.Spec.RDSpecs)).To(Equal(0))
 		})
@@ -59,7 +59,7 @@ var _ = Describe("Cghandler", func() {
 					Async: &ramendrv1alpha1.VRGAsyncSpec{},
 				},
 			}, nil, nil, "0", testLogger)
-			rgd, err := vsCGHandler.CreateOrUpdateReplicationGroupDestination(vgdName, "default",
+			rgd, err := vsCGHandler.CreateOrUpdateReplicationGroupDestination("default",
 				[]ramendrv1alpha1.VolSyncReplicationDestinationSpec{{
 					ProtectedPVC: ramendrv1alpha1.ProtectedPVC{
 						Name:      vsName,
@@ -170,7 +170,7 @@ var _ = Describe("Cghandler", func() {
 					Async: &ramendrv1alpha1.VRGAsyncSpec{},
 				},
 			}, &metav1.LabelSelector{}, nil, "0", testLogger)
-			rgs, finalSync, err := vsCGHandler.CreateOrUpdateReplicationGroupSource(rgsName, "default", false)
+			rgs, finalSync, err := vsCGHandler.CreateOrUpdateReplicationGroupSource("default", false)
 			Expect(err).To(BeNil())
 			Expect(finalSync).To(BeFalse())
 			Expect(rgs.Spec.Trigger.Schedule).NotTo(BeNil())

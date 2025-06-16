@@ -54,12 +54,12 @@ func NewVSCGHandler(
 
 type VSCGHandler interface {
 	CreateOrUpdateReplicationGroupDestination(
-		replicationGroupDestinationName, replicationGroupDestinationNamespace string,
+		replicationGroupDestinationNamespace string,
 		rdSpecsInGroup []ramendrv1alpha1.VolSyncReplicationDestinationSpec,
 	) (*ramendrv1alpha1.ReplicationGroupDestination, error)
 
 	CreateOrUpdateReplicationGroupSource(
-		replicationGroupSourceName, replicationGroupSourceNamespace string,
+		replicationGroupSourceNamespace string,
 		runFinalSync bool,
 	) (*ramendrv1alpha1.ReplicationGroupSource, bool, error)
 
@@ -94,10 +94,10 @@ type cgHandler struct {
 }
 
 func (c *cgHandler) CreateOrUpdateReplicationGroupDestination(
-	replicationGroupDestinationName, replicationGroupDestinationNamespace string,
+	replicationGroupDestinationNamespace string,
 	rdSpecsInGroup []ramendrv1alpha1.VolSyncReplicationDestinationSpec,
 ) (*ramendrv1alpha1.ReplicationGroupDestination, error) {
-	replicationGroupDestinationName = c.cgName
+	replicationGroupDestinationName := c.cgName
 
 	log := c.logger.WithName("CreateOrUpdateReplicationGroupDestination").
 		WithValues("ReplicationGroupDestinationName", replicationGroupDestinationName,
@@ -140,11 +140,9 @@ func (c *cgHandler) CreateOrUpdateReplicationGroupDestination(
 }
 
 //nolint:funlen,gocognit,cyclop,gocyclo
-func (c *cgHandler) CreateOrUpdateReplicationGroupSource(
-	replicationGroupSourceName, replicationGroupSourceNamespace string,
-	runFinalSync bool,
+func (c *cgHandler) CreateOrUpdateReplicationGroupSource(replicationGroupSourceNamespace string, runFinalSync bool,
 ) (*ramendrv1alpha1.ReplicationGroupSource, bool, error) {
-	replicationGroupSourceName = c.cgName
+	replicationGroupSourceName := c.cgName
 
 	log := c.logger.WithName("CreateOrUpdateReplicationGroupSource").
 		WithValues("ReplicationGroupSourceName", replicationGroupSourceName,
