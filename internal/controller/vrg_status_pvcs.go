@@ -35,7 +35,7 @@ func (v *VRGInstance) pvcStatusDeleteIfPresent(pvcNamespaceName, pvcName string,
 		return
 	}
 
-	log.Info("PVC status delete", "index", i)
+	log.Info("ProtectedPVC delete", "index", i)
 	v.instance.Status.ProtectedPVCs = sliceUnorderedElementDelete(v.instance.Status.ProtectedPVCs, i)
 }
 

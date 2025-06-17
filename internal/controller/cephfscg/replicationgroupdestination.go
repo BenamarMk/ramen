@@ -273,6 +273,8 @@ func (m *rgdMachine) CreateReplicationDestinations(
 			}
 
 			util.AddLabel(rd, util.RGDOwnerLabel, m.ReplicationGroupDestination.Name)
+			util.AddLabel(rd, volsync.VRGOwnerNameLabel, m.ReplicationGroupDestination.GetLabels()[volsync.VRGOwnerNameLabel])
+			util.AddLabel(rd, volsync.VRGOwnerNamespaceLabel, m.ReplicationGroupDestination.GetLabels()[volsync.VRGOwnerNamespaceLabel])
 			util.AddLabel(rd, util.CreatedByRamenLabel, "true")
 			util.AddAnnotation(rd, volsync.OwnerNameAnnotation, m.ReplicationGroupDestination.Name)
 			util.AddAnnotation(rd, volsync.OwnerNamespaceAnnotation, m.ReplicationGroupDestination.Namespace)

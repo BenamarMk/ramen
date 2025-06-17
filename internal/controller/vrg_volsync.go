@@ -718,20 +718,28 @@ func (v *VRGInstance) pvcUnprotectVolSync(pvc corev1.PersistentVolumeClaim, log 
 		return
 	}
 
-	if util.IsCGEnabledForVolSync(v.ctx, v.reconciler.APIReader, v.instance.Annotations) {
-		// At this moment, we don't support unprotecting CG PVCs.
-		log.Info("Unprotecting CG PVCs is not supported", "PVC", pvc.Name)
+	cg, ok := pvc.Labels[util.ConsistencyGroupLabel]
+	cgEnabled := util.IsCGEnabledForVolSync(v.ctx, v.reconciler.APIReader, v.instance.Annotations)
 
-		return
+	if ok && cgEnabled {
+		// If CG is enabled, we need to delete the ReplicationGroupSource (RGS)
+		// so that we can rebuild the list of PVCs in the CG.
+		// This is needed to ensure that it does not cost much for the RGS to be rebuilt.
+		log.Info("PVC has CG label. Deleting RGD in order to rebuild a new list", "Labels", pvc.Labels)
+		if err := util.DeleteReplicationGroupSource(v.ctx, v.reconciler.Client, cg, pvc.GetNamespace()); err != nil {
+			log.Error(err, "Failed to delete ReplicationGroupSource before creating ReplicationGroupDestination")
+
+			return
+		}
 	}
 
-	log.Info("Unprotecting VolSync PVC", "PVC", pvc.Name)
-	// This call is only from Primary cluster. delete ReplicationSource and related resources.
+	// This call is only from Primary cluster. delete ReplicationSource/CG resources.
 	if err := v.volSyncHandler.UnprotectVolSyncPVC(&pvc); err != nil {
 		log.Error(err, "Failed to unprotect VolSync PVC", "PVC", pvc.Name)
 
 		return
 	}
+
 	// Remove the PVC from VRG status
 	v.pvcStatusDeleteIfPresent(pvc.Namespace, pvc.Name, log)
 }

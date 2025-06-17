@@ -751,6 +751,13 @@ func (v *VRGInstance) labelPVCsForCG() error {
 	for idx := range v.volSyncPVCs {
 		pvc := &v.volSyncPVCs[idx]
 
+		if util.ResourceIsDeleted(pvc) {
+			v.log.Info(fmt.Sprintf("Skipping consistency group label for deleted PVC %s/%s",
+				pvc.GetNamespace(), pvc.GetName()))
+
+			continue
+		}
+
 		if err := v.addConsistencyGroupLabel(pvc); err != nil {
 			return fmt.Errorf("failed to label PVC %s/%s for consistency group (%w)",
 				pvc.GetNamespace(), pvc.GetName(), err)
