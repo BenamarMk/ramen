@@ -39,6 +39,8 @@ const (
 	CreatedByRamenLabel = "ramendr.openshift.io/created-by-ramen"
 
 	VGSCRDName = "volumegroupsnapshots.groupsnapshot.storage.k8s.io"
+
+	MarkForDeletion = "ramendr.io/marked-for-deletion"
 )
 
 type ResourceUpdater struct {
