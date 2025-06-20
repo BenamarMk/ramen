@@ -1243,6 +1243,8 @@ func (v *VSHandler) CleanupRDNotInSpecList(rdSpecList []ramendrv1alpha1.VolSyncR
 		return err
 	}
 
+	v.log.Info("current RD list by owner", "count", len(currentRDListByOwner.Items))
+
 	groupsToRecreate := map[string]string{}
 	for i := range currentRDListByOwner.Items {
 		rd := currentRDListByOwner.Items[i]
@@ -1251,10 +1253,14 @@ func (v *VSHandler) CleanupRDNotInSpecList(rdSpecList []ramendrv1alpha1.VolSyncR
 		cgName := ""
 
 		for _, rdSpec := range rdSpecList {
+			if rdSpec.ProtectedPVC.Labels[util.ConsistencyGroupLabel] != "" {
+				cgName = rdSpec.ProtectedPVC.Labels[util.ConsistencyGroupLabel]
+			}
+			// Check if the ReplicationDestination is in the spec list
 			if rd.GetName() == getReplicationDestinationName(rdSpec.ProtectedPVC.Name) &&
 				rd.GetNamespace() == rdSpec.ProtectedPVC.Namespace {
 				foundInSpecList = true
-				cgName = rdSpec.ProtectedPVC.Labels[util.ConsistencyGroupLabel]
+				cgName = "" // Reset cgName if found in spec list
 
 				break
 			}
@@ -1271,7 +1277,10 @@ func (v *VSHandler) CleanupRDNotInSpecList(rdSpecList []ramendrv1alpha1.VolSyncR
 				v.log.Error(err, "Error cleaning up ReplicationDestination", "name", rd.GetName())
 			} else {
 				v.log.Info("Deleted ReplicationDestination", "name", rd.GetName())
-				groupsToRecreate[cgName] = rd.GetNamespace()
+				// If this RD is part of a consistency group, we need to recreate the RGD
+				if cgName != "" {
+					groupsToRecreate[cgName] = rd.GetNamespace()
+				}
 			}
 
 			// Now delete the associated PVC if it exists and we are still secondary
@@ -2684,7 +2693,6 @@ func (v *VSHandler) UnprotectVolSyncPVC(pvc *corev1.PersistentVolumeClaim) error
 		DeleteLabel(VRGOwnerNamespaceLabel).
 		DeleteLabel(VolSyncDoNotDeleteLabel).
 		DeleteLabel(util.ConsistencyGroupLabel). // Remove the CG label, which will trigger RGS reconfiguration
-		DeleteAnnotation(ACMAppSubDoNotDeleteAnnotation).
 		RemoveFinalizer(PVCFinalizerProtected).
 		RemoveOwner(v.owner, v.client.Scheme()).
 		Update(v.ctx, v.client)

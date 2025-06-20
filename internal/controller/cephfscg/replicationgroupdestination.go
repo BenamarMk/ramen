@@ -264,6 +264,8 @@ func (m *rgdMachine) CreateReplicationDestinations(
 			Namespace: m.ReplicationGroupDestination.Namespace,
 		},
 	}
+	
+	m.Logger.Info("Create or update ReplicationDestination", "rgd", m.ReplicationGroupDestination.GetLabels()[volsync.VRGOwnerNameLabel])
 
 	if _, err := ctrlutil.CreateOrUpdate(
 		context.Background(), m.Client, rd,
