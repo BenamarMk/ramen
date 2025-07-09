@@ -409,7 +409,11 @@ func (r *DRPlacementControlReconciler) createDRPCInstance(
 
 	d.drType = DRTypeAsync
 
-	isMetro, _ := dRPolicySupportsMetro(drPolicy, drClusters, nil)
+	isMetro, _, err := dRPolicySupportsMetro(drPolicy, drClusters, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to check if DRPolicy supports Metro: %w", err)
+	}
+
 	if isMetro {
 		d.volSyncDisabled = true
 		d.drType = DRTypeSync
@@ -1469,7 +1473,11 @@ func (r *DRPlacementControlReconciler) setDRPCMetrics(ctx context.Context,
 	}
 
 	// do not set sync metrics if metro-dr
-	isMetro, _ := dRPolicySupportsMetro(drPolicy, drClusters, nil)
+	isMetro, _, err := dRPolicySupportsMetro(drPolicy, drClusters, nil)
+	if err != nil {
+		return fmt.Errorf("failed to check if DRPolicy supports Metro: %w", err)
+	}
+
 	if isMetro {
 		return nil
 	}
@@ -1866,6 +1874,10 @@ func (r *DRPlacementControlReconciler) retainPlacementClusterDecisionAsFailover(
 		return err
 	}
 
+	if plDecision == nil {
+		return nil
+	}
+	
 	for idx := range plDecision.Status.Decisions {
 		if plDecision.Status.Decisions[idx].Reason == PlacementDecisionReasonFailoverRetained {
 			continue

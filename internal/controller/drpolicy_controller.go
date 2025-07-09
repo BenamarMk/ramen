@@ -149,12 +149,12 @@ func (r *DRPolicyReconciler) reconcile(
 		return ctrl.Result{}, fmt.Errorf("unable to set drpolicy validation: %w", err)
 	}
 
-	if err := propagateS3Secret(u.object, drclusters, secretsUtil, ramenConfig, u.log); err != nil {
-		return ctrl.Result{}, fmt.Errorf("drpolicy deploy: %w", err)
-	}
-
 	if err := updatePeerClasses(u, r.MCVGetter); err != nil {
 		return ctrl.Result{}, fmt.Errorf("drpolicy peerClass update: %w", err)
+	}
+
+	if err := propagateS3Secret(u.object, drclusters, secretsUtil, ramenConfig, u.log); err != nil {
+		return ctrl.Result{}, fmt.Errorf("drpolicy deploy: %w", err)
 	}
 
 	// we will be able to validate conflicts only after PeerClasses are updated
@@ -171,7 +171,10 @@ func (r *DRPolicyReconciler) reconcile(
 }
 
 func (r *DRPolicyReconciler) initiateDRPolicyMetrics(drpolicy *ramen.DRPolicy, drclusters *ramen.DRClusterList) error {
-	isMetro, _ := dRPolicySupportsMetro(drpolicy, drclusters.Items, nil)
+	isMetro, _, err := dRPolicySupportsMetro(drpolicy, drclusters.Items, nil)
+	if err != nil {
+		return fmt.Errorf("failed to check if DRPolicy supports Metro: %w", err)
+	}
 
 	// Do not set metric for metro-dr
 	if !isMetro {
@@ -190,6 +193,7 @@ func (r *DRPolicyReconciler) getDRClusterDetails(ctx context.Context) (*ramen.DR
 	}
 
 	drClusterIDsToNames := map[string]string{}
+	
 	for idx := range drClusters.Items {
 		mc, err := util.NewManagedClusterInstance(ctx, r.Client, drClusters.Items[idx].GetName())
 		if err != nil {
@@ -336,15 +340,16 @@ func hasConflictingDRPolicy(
 	return nil
 }
 
+//nolint:errcheck
 func haveOverlappingMetroZones(
 	d1, d2 *ramen.DRPolicy,
 	drclusters *ramen.DRClusterList,
 	drClusterIDsToNames map[string]string,
 ) bool {
 	d1ClusterNames := sets.NewString(util.DRPolicyClusterNames(d1)...)
-	d1SupportsMetro, d1MetroClusters := dRPolicySupportsMetro(d1, drclusters.Items, drClusterIDsToNames)
+	d1SupportsMetro, d1MetroClusters, _ := dRPolicySupportsMetro(d1, drclusters.Items, drClusterIDsToNames)
 	d2ClusterNames := sets.NewString(util.DRPolicyClusterNames(d2)...)
-	d2SupportsMetro, d2MetroClusters := dRPolicySupportsMetro(d2, drclusters.Items, drClusterIDsToNames)
+	d2SupportsMetro, d2MetroClusters, _ := dRPolicySupportsMetro(d2, drclusters.Items, drClusterIDsToNames)
 	commonClusters := d1ClusterNames.Intersection(d2ClusterNames)
 
 	// No common managed clusters, so we are good
@@ -407,7 +412,11 @@ func (u *drpolicyUpdater) deleteDRPolicy(drclusters *ramen.DRClusterList,
 	}
 
 	// proceed to delete metrics if non-metro-dr
-	isMetro, _ := dRPolicySupportsMetro(u.object, drclusters.Items, nil)
+	isMetro, _, err := dRPolicySupportsMetro(u.object, drclusters.Items, nil)
+	if err != nil {
+		return fmt.Errorf("failed to check if DRPolicy supports Metro: %w", err)
+	}
+
 	if !isMetro {
 		// delete metrics if matching labels are found
 		metricLabels := DRPolicySyncIntervalMetricLabels(u.object)
