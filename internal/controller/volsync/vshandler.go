@@ -699,6 +699,7 @@ func (v *VSHandler) createTmpPVCForFinalSync(pvcNamespacedName types.NamespacedN
 		tmpPVC.UID = ""
 		tmpPVC.Finalizers = nil
 		tmpPVC.Annotations = map[string]string{} // {"ramendr/tmp-pvc-created": "yes"}
+
 		if cgVal, ok := pvc.GetLabels()[util.ConsistencyGroupLabel]; ok {
 			tmpPVC.ObjectMeta.Labels = map[string]string{
 				util.ConsistencyGroupLabel: cgVal, // include only CG label if exists
@@ -2794,7 +2795,7 @@ func (v *VSHandler) UnprotectVolSyncPVC(pvc *corev1.PersistentVolumeClaim) error
 }
 
 func getTmpPVCNameForFinalSync(pvcName string) string {
-	return fmt.Sprintf("%s-for-finalsync", pvcName)
+	return fmt.Sprintf("%s%s", pvcName, util.SuffixForFinalsyncPVC)
 }
 
 func updateClaimRef(pv *corev1.PersistentVolume, name, namespace string) {
