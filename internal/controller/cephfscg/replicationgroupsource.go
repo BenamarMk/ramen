@@ -105,6 +105,18 @@ func (m *replicationGroupSourceMachine) Conditions() *[]metav1.Condition {
 func (m *replicationGroupSourceMachine) Synchronize(ctx context.Context) (mover.Result, error) {
 	m.Logger.Info("Create volume group snapshot")
 
+	inUse, err := m.VolumeGroupHandler.CheckPVCsInGroupAreInUse(ctx)
+	if err != nil {
+		m.Logger.Error(err, "Failed to check if PVCs are in use before creating volume group snapshot")
+
+		return mover.InProgress(), err
+	}
+	if !inUse {
+		m.Logger.Error(err, "Some PVCs are not in use, cannot create volume group snapshot now")
+
+		return mover.InProgress(), nil
+	}
+
 	createdOrUpdatedVGS, err := m.VolumeGroupHandler.CreateOrUpdateVolumeGroupSnapshot(
 		ctx, m.ReplicationGroupSource,
 	)

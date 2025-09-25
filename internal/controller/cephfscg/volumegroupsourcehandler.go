@@ -56,6 +56,10 @@ type VolumeGroupSourceHandler interface {
 	CleanVolumeGroupSnapshot(
 		ctx context.Context,
 	) error
+
+	CheckPVCsInGroupAreInUse(
+		ctx context.Context,
+	) (bool, error)
 }
 
 type RestoredPVC struct {
@@ -565,6 +569,48 @@ func (h *volumeGroupSourceHandler) CheckReplicationSourceForRestoredPVCsComplete
 	}
 
 	logger.Info("All replication sources are successfully completed")
+
+	return true, nil
+}
+
+func (h *volumeGroupSourceHandler) CheckPVCsInGroupAreInUse(
+	ctx context.Context,
+) (bool, error) {
+	h.Logger.Info("Checking if all PVCs in the group are in use by one or more pods")
+
+	pvcList, err := util.ListPVCsByCGLabel(ctx, h.Client, h.VolumeGroupSnapshotNamespace,
+		h.VolumeGroupLabel.MatchLabels[util.ConsistencyGroupLabel], h.Logger)
+	if err != nil {
+		h.Logger.Error(err, "Failed to list PVCs by CG label",
+			"CGLabel", h.VolumeGroupLabel.MatchLabels[util.ConsistencyGroupLabel],
+			"Namespace", h.VolumeGroupSnapshotNamespace)
+
+		return false, err
+	}
+
+	for _, pvc := range pvcList.Items {
+		if pvc.Status.Phase != corev1.ClaimBound {
+			return false, err
+		}
+
+		pvcNamespacedName := types.NamespacedName{
+			Namespace: pvc.Namespace,
+			Name:      pvc.Name,
+		}
+
+		inUseByPod, err := util.IsPVCInUseByPod(ctx, h.Client, h.Logger, pvcNamespacedName, false)
+		if err != nil {
+			return false, err
+		}
+
+		if !inUseByPod {
+			h.Logger.Info("PVC in the group is in use by a pod", "name", pvc.Name, "namespace", pvc.Namespace)
+
+			return false, nil
+		}
+	}
+
+	h.Logger.Info("All PVCs in the group are in use by one or more pods")
 
 	return true, nil
 }
