@@ -425,6 +425,7 @@ rules:
   - volsync.backube
   resources:
   - replicationdestinations/finalizers
+  - replicationsources/finalizers
   verbs:
   - update
 - apiGroups:
