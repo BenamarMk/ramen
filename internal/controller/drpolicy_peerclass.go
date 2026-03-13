@@ -20,12 +20,20 @@ import (
 
 // classLists contains [storage|snapshot|replication]classes from ManagedClusters with the required ramen storageID or,
 // replicationID labels
+//
+// TODO (Agnostic DR - Step 3.4): Enhance PeerClass discovery to support both legacy and neutral APIs
+// Currently uses legacy API (replication.storage.openshift.io) exclusively.
+// Future enhancement needed:
+// - Add neutral API (replication.storage.io) support alongside legacy
+// - Use replication handler interface for VGRClass discovery
+// - Maintain backward compatibility during transition
+// - Priority: Neutral API > Legacy API (consistent with handler discovery)
 type classLists struct {
 	clusterID  string
 	sClasses   []*storagev1.StorageClass
 	vsClasses  []*snapv1.VolumeSnapshotClass
 	vrClasses  []*volrep.VolumeReplicationClass
-	vgrClasses []*volrep.VolumeGroupReplicationClass
+	vgrClasses []*volrep.VolumeGroupReplicationClass // TODO: Support neutral API VGRClasses
 	vgsClasses []*groupsnapv1beta1.VolumeGroupSnapshotClass
 }
 
@@ -699,6 +707,14 @@ func pruneVGSClassViews(
 }
 
 // getVGRClassesFromCluster gets VolumeGroupReplicationClasses that are claimed in the DRClusterConfig status
+//
+// TODO (Agnostic DR - Step 3.4): Enhance to support neutral API VGRClasses
+// Current implementation only retrieves legacy API (replication.storage.openshift.io) VGRClasses.
+// Future enhancement:
+// - Check for neutral API (replication.storage.io) VGRClasses first
+// - Fall back to legacy API if neutral not available
+// - Use replication handler's DiscoverVGRClasses method
+// - Return unified list supporting both APIs during transition
 func getVGRClassesFromCluster(
 	u *drpolicyUpdater,
 	m util.ManagedClusterViewGetter,

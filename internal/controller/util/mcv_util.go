@@ -354,11 +354,21 @@ func (m ManagedClusterViewGetterImpl) ListVGSClassMCVs(cluster string) (*viewv1b
 	return m.listMCVsWithLabel(cluster, map[string]string{VGSClassLabel: ""})
 }
 
+// GetVGRClassFromManagedCluster retrieves a VolumeGroupReplicationClass from a managed cluster
+//
+// TODO (Agnostic DR - Step 3.4): Enhance to support neutral API VGRClasses
+// Current implementation hardcodes legacy API group (replication.storage.openshift.io).
+// Future enhancement needed:
+// - Try neutral API (replication.storage.io) first
+// - Fall back to legacy API if neutral not found
+// - Use API discovery mechanism to determine which API to query
+// - Return appropriate type based on discovered API
 func (m ManagedClusterViewGetterImpl) GetVGRClassFromManagedCluster(resourceName, managedCluster string,
 	annotations map[string]string,
 ) (*volrep.VolumeGroupReplicationClass, error) {
 	vgrc := &volrep.VolumeGroupReplicationClass{}
 
+	// TODO: Replace hardcoded volrep.GroupVersion with dynamic API group selection
 	err := m.getResourceFromManagedCluster(
 		resourceName,
 		"",
@@ -367,7 +377,7 @@ func (m ManagedClusterViewGetterImpl) GetVGRClassFromManagedCluster(resourceName
 		map[string]string{VGRClassLabel: ""},
 		BuildManagedClusterViewName(resourceName, "", MWTypeVGRClass),
 		"VolumeGroupReplicationClass",
-		volrep.GroupVersion.Group,
+		volrep.GroupVersion.Group, // TODO: Support neutral API group (replication.storage.io)
 		volrep.GroupVersion.Version,
 		vgrc,
 	)
