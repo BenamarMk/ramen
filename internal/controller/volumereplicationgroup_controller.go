@@ -44,6 +44,7 @@ import (
 	recipecore "github.com/ramendr/ramen/internal/controller/core"
 	"github.com/ramendr/ramen/internal/controller/kubeobjects"
 	"github.com/ramendr/ramen/internal/controller/kubeobjects/velero"
+	"github.com/ramendr/ramen/internal/controller/replication"
 	"github.com/ramendr/ramen/internal/controller/util"
 	"github.com/ramendr/ramen/internal/controller/volsync"
 )
@@ -470,6 +471,18 @@ func (r *VolumeReplicationGroupReconciler) Reconcile(ctx context.Context, req ct
 		v.instance.Spec.Async, cephFSCSIDriverNameOrDefault(v.ramenConfig),
 		volSyncDestinationCopyMethodOrDefault(v.ramenConfig), adminNamespaceVRG)
 
+	// Initialize replication discovery and handler
+	v.replicationDiscovery = replication.NewDiscovery(r.Client, log)
+	handler, handlerType, err := v.replicationDiscovery.DiscoverHandler(ctx)
+	if err != nil {
+		log.Error(err, "Failed to discover replication handler, falling back to legacy")
+		// Fallback to legacy handler if discovery fails
+		v.replicationHandler = replication.NewLegacyHandler()
+	} else {
+		v.replicationHandler = handler
+		log.Info("Replication handler initialized", "type", handlerType, "apiGroup", v.replicationHandler.GetAPIGroup())
+	}
+
 	if v.instance.Status.ProtectedPVCs == nil {
 		v.instance.Status.ProtectedPVCs = []ramendrv1alpha1.ProtectedPVC{}
 	}
@@ -513,6 +526,11 @@ type VRGInstance struct {
 	objectStorers        map[string]cachedObjectStorer
 	s3StoreAccessors     []s3StoreAccessor
 	result               ctrl.Result
+	// replicationHandler provides abstraction for volume group replication operations
+	// Supports both legacy (replication.storage.openshift.io) and neutral (replication.storage.io) APIs
+	replicationHandler replication.ReplicationHandler
+	// replicationDiscovery handles automatic detection of available replication APIs
+	replicationDiscovery *replication.Discovery
 }
 
 // struct with pv with volrepclass and volsync
