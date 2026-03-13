@@ -53,10 +53,20 @@ type DRClusterConfigStatus struct {
 
 	// VolumeReplicationClasses lists the detected volume replication classes on the cluster that carry the ramen
 	// replicationid label
+	// TODO (Agnostic DR - Phase 4): Currently only detects legacy API (replication.storage.openshift.io) classes
 	VolumeReplicationClasses []string `json:"volumeReplicationClasses,omitempty"`
 
 	// VolumeGroupReplicationClasses lists the detected volume group replication classes on the cluster that carry the
 	// ramen replicationid label
+	// TODO (Agnostic DR - Phase 4): Enhance to detect both legacy and neutral API VGRClasses
+	// Future enhancement needed:
+	// - Detect VGRClasses from both replication.storage.openshift.io and replication.storage.io
+	// - Add separate fields or metadata to distinguish API groups
+	// - Maintain backward compatibility during transition
+	// Proposed approach:
+	//   Option A: Add NeutralVolumeGroupReplicationClasses []string field
+	//   Option B: Use structured type with APIGroup metadata
+	//   Option C: Use naming convention (e.g., "neutral/classname" vs "legacy/classname")
 	VolumeGroupReplicationClasses []string `json:"volumeGroupReplicationClasses,omitempty"`
 
 	// NetworkFenceClass lists all the classes that match the provisioner on the cluster that can be used for fencing
