@@ -165,6 +165,14 @@ spec:
                 description: |-
                   VolumeGroupReplicationClasses lists the detected volume group replication classes on the cluster that carry the
                   ramen replicationid label
+                  Future enhancement needed:
+                  - Detect VGRClasses from both replication.storage.openshift.io and replication.storage.io
+                  - Add separate fields or metadata to distinguish API groups
+                  - Maintain backward compatibility during transition
+                  Proposed approach:
+                    Option A: Add NeutralVolumeGroupReplicationClasses []string field
+                    Option B: Use structured type with APIGroup metadata
+                    Option C: Use naming convention (e.g., "neutral/classname" vs "legacy/classname")
                 items:
                   type: string
                 type: array
