@@ -1093,3 +1093,109 @@ func (v *VRGInstance) processVGRCSecrets(vgrc *volrep.VolumeGroupReplicationCont
 
 	return nil
 }
+
+
+// ============================================================================
+// Replication Handler Wrapper Methods (Approach A: Gradual Migration)
+// ============================================================================
+// These helper methods provide a bridge between the existing VRG code and the
+// new replication handler interface. They allow gradual migration from direct
+// API calls to the abstraction layer without breaking existing functionality.
+
+// vgrHandlerGet retrieves a VGR using the replication handler interface
+// This is a wrapper that maintains compatibility with existing code while
+// using the new abstraction layer underneath.
+func (v *VRGInstance) vgrHandlerGet(
+	vrNamespacedName types.NamespacedName,
+	log logr.Logger,
+) (*volrep.VolumeGroupReplication, error) {
+	// For now, use direct API call (legacy behavior)
+	// TODO: Migrate to handler interface once all callers are updated
+	vgr := &volrep.VolumeGroupReplication{}
+	err := v.reconciler.Get(v.ctx, vrNamespacedName, vgr)
+	
+	if err != nil {
+		return nil, err
+	}
+	
+	return vgr, nil
+}
+
+// vgrHandlerCreate creates a VGR using the replication handler interface
+// This wrapper allows gradual migration to the handler interface
+func (v *VRGInstance) vgrHandlerCreate(
+	vgr *volrep.VolumeGroupReplication,
+	log logr.Logger,
+) error {
+	// For now, use direct API call (legacy behavior)
+	// TODO: Migrate to handler interface once all callers are updated
+	return v.reconciler.Create(v.ctx, vgr)
+}
+
+// vgrHandlerUpdate updates a VGR using the replication handler interface
+// This wrapper allows gradual migration to the handler interface
+func (v *VRGInstance) vgrHandlerUpdate(
+	vgr *volrep.VolumeGroupReplication,
+	log logr.Logger,
+) error {
+	// For now, use direct API call (legacy behavior)
+	// TODO: Migrate to handler interface once all callers are updated
+	return v.reconciler.Update(v.ctx, vgr)
+}
+
+// vgrHandlerDelete deletes a VGR using the replication handler interface
+// This wrapper allows gradual migration to the handler interface
+func (v *VRGInstance) vgrHandlerDelete(
+	vrNamespacedName types.NamespacedName,
+	log logr.Logger,
+) error {
+	// For now, use direct API call (legacy behavior)
+	// TODO: Migrate to handler interface once all callers are updated
+	vgr := &volrep.VolumeGroupReplication{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      vrNamespacedName.Name,
+			Namespace: vrNamespacedName.Namespace,
+		},
+	}
+	
+	return v.reconciler.Delete(v.ctx, vgr)
+}
+
+// vgrHandlerIsReady checks if a VGR is ready using the replication handler interface
+// This wrapper allows gradual migration to the handler interface
+func (v *VRGInstance) vgrHandlerIsReady(
+	vrNamespacedName types.NamespacedName,
+	log logr.Logger,
+) (bool, error) {
+	// For now, use direct API call (legacy behavior)
+	// TODO: Migrate to handler interface once all callers are updated
+	vgr := &volrep.VolumeGroupReplication{}
+	err := v.reconciler.Get(v.ctx, vrNamespacedName, vgr)
+	
+	if err != nil {
+		return false, err
+	}
+	
+	// Check if VGR is ready based on conditions
+	for _, condition := range vgr.Status.Conditions {
+		if condition.Type == "Ready" && condition.Status == metav1.ConditionTrue {
+			return true, nil
+		}
+	}
+	
+	return false, nil
+}
+
+// Migration Note:
+// These wrapper methods are intentionally simple and maintain backward compatibility.
+// Future commits will:
+// 1. Update these methods to use v.replicationHandler interface
+// 2. Convert between legacy volrep types and handler abstract types
+// 3. Gradually migrate callers to use these wrappers instead of direct API calls
+// 4. Eventually remove direct API calls entirely
+//
+// This approach ensures:
+// - Zero breaking changes during transition
+// - Incremental testing and validation
+// - Easy rollback if issues are discovered
+// - Clear migration path for future development
