@@ -6,6 +6,7 @@ package controllers
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/aws/aws-sdk-go/aws/awserr"
 	volrep "github.com/csi-addons/kubernetes-csi-addons/api/replication.storage/v1alpha1"
@@ -1195,6 +1196,130 @@ func (v *VRGInstance) vgrHandlerIsReady(
 // 4. Eventually remove direct API calls entirely
 //
 // This approach ensures:
+
+// ============================================================================
+// Handler Switching Logic (Step 3.5)
+// ============================================================================
+
+// vgrHandlerRefresh re-discovers and updates the replication handler
+// This allows runtime switching if API availability changes (e.g., neutral API becomes available)
+// Call this method when:
+// - VGRClass operations fail with "not found" errors
+// - Cluster configuration changes
+// - After operator upgrades that add new APIs
+func (v *VRGInstance) vgrHandlerRefresh(log logr.Logger) error {
+	if v.replicationDiscovery == nil {
+		return fmt.Errorf("replication discovery not initialized")
+	}
+	
+	log.Info("Refreshing replication handler discovery")
+	
+	handler, handlerType, err := v.replicationDiscovery.DiscoverHandler(v.ctx)
+	if err != nil {
+		log.Error(err, "Failed to refresh replication handler")
+		return err
+	}
+	
+	// Check if handler type changed
+	oldAPIGroup := ""
+	if v.replicationHandler != nil {
+		oldAPIGroup = v.replicationHandler.GetAPIGroup()
+	}
+	
+	newAPIGroup := handler.GetAPIGroup()
+	
+	if oldAPIGroup != newAPIGroup {
+		log.Info("Replication handler switched",
+			"from", oldAPIGroup,
+			"to", newAPIGroup,
+			"type", handlerType)
+	}
+	
+	v.replicationHandler = handler
+	
+	return nil
+}
+
+// vgrHandlerShouldRefresh determines if handler refresh is needed based on error
+// Returns true if the error suggests API availability has changed
+func (v *VRGInstance) vgrHandlerShouldRefresh(err error) bool {
+	if err == nil {
+		return false
+	}
+	
+	// Check for "not found" errors that might indicate API group unavailability
+	if k8serrors.IsNotFound(err) {
+		return true
+	}
+	
+	// Check for API group not found errors
+	errMsg := err.Error()
+	if strings.Contains(errMsg, "no matches for kind") ||
+		strings.Contains(errMsg, "the server could not find the requested resource") {
+		return true
+	}
+	
+	return false
+}
+
+// vgrHandlerWithAutoRefresh wraps VGR operations with automatic handler refresh on API errors
+// This provides resilience when API availability changes at runtime
+//
+// Example usage:
+//   err := v.vgrHandlerWithAutoRefresh(log, func() error {
+//       return v.vgrHandlerCreate(vgr, log)
+//   })
+func (v *VRGInstance) vgrHandlerWithAutoRefresh(log logr.Logger, operation func() error) error {
+	err := operation()
+	
+	// If operation succeeded, return
+	if err == nil {
+		return nil
+	}
+	
+	// Check if we should refresh the handler
+	if !v.vgrHandlerShouldRefresh(err) {
+		return err
+	}
+	
+	log.Info("VGR operation failed, attempting handler refresh", "error", err.Error())
+	
+	// Attempt to refresh handler
+	if refreshErr := v.vgrHandlerRefresh(log); refreshErr != nil {
+		log.Error(refreshErr, "Handler refresh failed")
+		return fmt.Errorf("operation failed and handler refresh failed: %w", err)
+	}
+	
+	// Retry operation with new handler
+	log.Info("Retrying VGR operation with refreshed handler")
+	retryErr := operation()
+	
+	if retryErr != nil {
+		return fmt.Errorf("operation failed after handler refresh: %w", retryErr)
+	}
+	
+	log.Info("VGR operation succeeded after handler refresh")
+	
+	return nil
+}
+
+// Migration Note for Step 3.5:
+// These handler switching methods provide runtime resilience during the transition period.
+// They enable automatic failover between neutral and legacy APIs based on availability.
+//
+// Future usage pattern:
+//   // Instead of direct call:
+//   err := v.vgrHandlerCreate(vgr, log)
+//
+//   // Use auto-refresh wrapper:
+//   err := v.vgrHandlerWithAutoRefresh(log, func() error {
+//       return v.vgrHandlerCreate(vgr, log)
+//   })
+//
+// This ensures operations continue working even if:
+// - Neutral API is deployed after operator starts
+// - Legacy API is removed during upgrade
+// - API availability changes due to cluster configuration
 // - Zero breaking changes during transition
 // - Incremental testing and validation
 // - Easy rollback if issues are discovered
