@@ -238,6 +238,26 @@ spec:
                       PeerClasses is a list of common StorageClasses across the clusters in a policy
                       that have related async relationships. (one per pair of peers in the policy)
                     items:
+                      description: |-
+                        PeerClass represents a storage class relationship between peer clusters
+
+                        Current implementation assumes legacy API (replication.storage.openshift.io) exclusively.
+                        Future enhancements needed:
+                        1. Add APIGroup field to indicate which replication API is being used
+                        2. Support both "replication.storage.openshift.io" and "replication.storage.io"
+                        3. Add APIVersion field for future API version changes
+                        4. Maintain backward compatibility with existing PeerClass resources
+                        5. Update PeerClass matching logic to consider API group
+
+                        Proposed additional fields:
+                          APIGroup string `json:"apiGroup,omitempty"` // e.g., "replication.storage.io"
+                          APIVersion string `json:"apiVersion,omitempty"` // e.g., "v1alpha1"
+
+                        This will enable:
+                        - Mixed deployments with both legacy and neutral APIs
+                        - Gradual migration from legacy to neutral APIs
+                        - Clear indication of which API a PeerClass uses
+                        - Future-proof design for API evolution
                       properties:
                         clusterIDs:
                           description: |-
@@ -351,6 +371,26 @@ spec:
                       PeerClasses is a list of common StorageClasses across the clusters in a policy
                       that have related sync relationships. (one per pair of peers in the policy)
                     items:
+                      description: |-
+                        PeerClass represents a storage class relationship between peer clusters
+
+                        Current implementation assumes legacy API (replication.storage.openshift.io) exclusively.
+                        Future enhancements needed:
+                        1. Add APIGroup field to indicate which replication API is being used
+                        2. Support both "replication.storage.openshift.io" and "replication.storage.io"
+                        3. Add APIVersion field for future API version changes
+                        4. Maintain backward compatibility with existing PeerClass resources
+                        5. Update PeerClass matching logic to consider API group
+
+                        Proposed additional fields:
+                          APIGroup string `json:"apiGroup,omitempty"` // e.g., "replication.storage.io"
+                          APIVersion string `json:"apiVersion,omitempty"` // e.g., "v1alpha1"
+
+                        This will enable:
+                        - Mixed deployments with both legacy and neutral APIs
+                        - Gradual migration from legacy to neutral APIs
+                        - Clear indication of which API a PeerClass uses
+                        - Future-proof design for API evolution
                       properties:
                         clusterIDs:
                           description: |-
