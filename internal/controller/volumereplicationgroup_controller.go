@@ -483,6 +483,9 @@ func (r *VolumeReplicationGroupReconciler) Reconcile(ctx context.Context, req ct
 		log.Info("Replication handler initialized", "type", handlerType, "apiGroup", v.replicationHandler.GetAPIGroup())
 	}
 
+	// Initialize replication selector for offload-aware handler selection
+	v.replicationSelector = replication.NewHandlerSelector(r.Client, log)
+
 	if v.instance.Status.ProtectedPVCs == nil {
 		v.instance.Status.ProtectedPVCs = []ramendrv1alpha1.ProtectedPVC{}
 	}
@@ -531,6 +534,8 @@ type VRGInstance struct {
 	replicationHandler replication.ReplicationHandler
 	// replicationDiscovery handles automatic detection of available replication APIs
 	replicationDiscovery *replication.Discovery
+	// replicationSelector enables offload-aware handler selection based on StorageClass labels
+	replicationSelector *replication.HandlerSelector
 }
 
 // struct with pv with volrepclass and volsync

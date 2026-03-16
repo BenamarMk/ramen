@@ -19,6 +19,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	ramendrv1alpha1 "github.com/ramendr/ramen/api/v1alpha1"
+	"github.com/ramendr/ramen/internal/controller/replication"
 	rmnutil "github.com/ramendr/ramen/internal/controller/util"
 )
 
@@ -747,18 +748,23 @@ func (v *VRGInstance) updateVGR(pvcs []*corev1.PersistentVolumeClaim,
 	return !requeue, false, nil
 }
 
-// createVGR creates a VolumeGroupReplication CR
+// createVGR creates a VolumeGroupReplication CR using the appropriate handler
+// based on the StorageClass offloaded label
 //
 //nolint:funlen
 func (v *VRGInstance) createVGR(vrNamespacedName types.NamespacedName,
 	pvcs []*corev1.PersistentVolumeClaim, state volrep.ReplicationState,
 ) error {
-	storageClass, err := v.validateAndGetStorageClass(pvcs[0].Spec.StorageClassName, pvcs[0])
-	if err != nil {
+	// Validate StorageClass exists
+	if _, err := v.validateAndGetStorageClass(pvcs[0].Spec.StorageClassName, pvcs[0]); err != nil {
 		return err
 	}
 
-	offloaded := rmnutil.HasLabel(storageClass, StorageOffloadedLabel)
+	// Select the appropriate handler based on StorageClass offloaded label
+	handler, err := v.selectHandlerForStorageClass(pvcs[0].Spec.StorageClassName, v.log)
+	if err != nil {
+		return fmt.Errorf("failed to select replication handler: %w", err)
+	}
 
 	volumeGroupReplicationClass, err := v.selectVolumeReplicationClass(pvcs[0], true)
 	if err != nil {
@@ -766,62 +772,47 @@ func (v *VRGInstance) createVGR(vrNamespacedName types.NamespacedName,
 			v.instance.Name, err)
 	}
 
-	volumeReplicationClassName := ""
-
-	if !offloaded {
-		volumeReplicationClass, err := v.selectVolumeReplicationClass(pvcs[0], false)
-		if err != nil {
-			return fmt.Errorf("failed to find the appropriate VolumeReplicationClass (%s) %w",
-				v.instance.Name, err)
-		}
-
-		volumeReplicationClassName = volumeReplicationClass.GetName()
-	}
-
 	cg, ok := pvcs[0].GetLabels()[rmnutil.ConsistencyGroupLabel]
 	if !ok {
-		return fmt.Errorf("failed to create VolumeGroupReplication (%s/%s) %w",
-			vrNamespacedName.Namespace, vrNamespacedName.Name, err)
+		return fmt.Errorf("failed to create VolumeGroupReplication (%s/%s): consistency group label not found",
+			vrNamespacedName.Namespace, vrNamespacedName.Name)
 	}
 
 	selector := metav1.AddLabelToSelector(&v.recipeElements.PvcSelector.LabelSelector, rmnutil.ConsistencyGroupLabel, cg)
 
-	volRep := &volrep.VolumeGroupReplication{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      vrNamespacedName.Name,
-			Namespace: vrNamespacedName.Namespace,
-			Labels:    rmnutil.OwnerLabels(v.instance),
-		},
-		Spec: volrep.VolumeGroupReplicationSpec{
-			ReplicationState:                state,
-			VolumeReplicationClassName:      volumeReplicationClassName,
-			VolumeGroupReplicationClassName: volumeGroupReplicationClass.GetName(),
-			External:                        offloaded,
-			Source: volrep.VolumeGroupReplicationSource{
-				Selector: selector,
-			},
-		},
+	// Convert volrep.ReplicationState to replication.ReplicationState
+	var replState replication.ReplicationState
+	switch state {
+	case volrep.Primary:
+		replState = replication.Primary
+	case volrep.Secondary:
+		replState = replication.Secondary
+	case volrep.Resync:
+		replState = replication.Resync
+	default:
+		return fmt.Errorf("unknown replication state: %s", state)
 	}
 
-	rmnutil.AddLabel(volRep, rmnutil.CreatedByRamenLabel, "true")
-
-	if !vrgInAdminNamespace(v.instance, v.ramenConfig) {
-		// This is to keep existing behavior of ramen.
-		// Set the owner reference only for the VRs which are in the same namespace as the VRG and
-		// when VRG is not in the admin namespace.
-		if err := ctrl.SetControllerReference(v.instance, volRep, v.reconciler.Scheme); err != nil {
-			return fmt.Errorf("failed to set owner reference to VolumeGroupReplication resource (%s/%s), %w",
-				volRep.GetName(), volRep.GetNamespace(), err)
-		}
+	// Build VGRSpec for the handler
+	spec := replication.VGRSpec{
+		ReplicationState: replState,
+		VGRClassName:     volumeGroupReplicationClass.GetName(),
+		PVCSelector:      selector,
+		AutoResync:       false, // TODO: Make this configurable if needed
 	}
 
-	if err := v.reconciler.Create(v.ctx, volRep); err != nil {
-		return fmt.Errorf("failed to create VolumeGroupReplication resource (%s/%s), %w",
-			volRep.GetName(), volRep.GetNamespace(), err)
+	// Use the handler to create the VGR (creates appropriate API type)
+	if err := handler.CreateVGR(v.ctx, v.reconciler.Client, vrNamespacedName, spec); err != nil {
+		return fmt.Errorf("failed to create VolumeGroupReplication resource (%s/%s) using %s: %w",
+			vrNamespacedName.Name, vrNamespacedName.Namespace, handler.GetAPIGroup(), err)
 	}
 
-	v.log.Info(fmt.Sprintf("Created VolumeGroupReplication resource (%s/%s) with state %s",
-		volRep.GetName(), volRep.GetNamespace(), state))
+	v.log.Info("Created VolumeGroupReplication resource",
+		"name", vrNamespacedName.Name,
+		"namespace", vrNamespacedName.Namespace,
+		"state", state,
+		"apiGroup", handler.GetAPIGroup(),
+		"storageClass", *pvcs[0].Spec.StorageClassName)
 
 	return nil
 }
@@ -1238,6 +1229,36 @@ func (v *VRGInstance) vgrHandlerRefresh(log logr.Logger) error {
 	v.replicationHandler = handler
 	
 	return nil
+}
+
+// selectHandlerForStorageClass selects the appropriate replication handler based on StorageClass
+// This enables offload-aware handler selection using the ramendr.openshift.io/offloaded label
+// - offloaded=true: Use Neutral API (replication.storage.io)
+// - offloaded=false or no label: Use Legacy API (csi-addons) - DEFAULT
+func (v *VRGInstance) selectHandlerForStorageClass(storageClassName *string, log logr.Logger) (replication.ReplicationHandler, error) {
+	if v.replicationSelector == nil {
+		log.Info("Replication selector not initialized, using default handler")
+		return v.replicationHandler, nil
+	}
+
+	if storageClassName == nil || *storageClassName == "" {
+		log.Info("No StorageClass specified, using default handler")
+		return v.replicationHandler, nil
+	}
+
+	// Use selector with fallback to select handler based on StorageClass offloaded label
+	handler, handlerType, err := v.replicationSelector.SelectHandlerWithFallback(v.ctx, *storageClassName)
+	if err != nil {
+		log.Error(err, "Failed to select handler for StorageClass, using default handler", "storageClass", *storageClassName)
+		return v.replicationHandler, nil
+	}
+
+	log.Info("Selected replication handler for StorageClass",
+		"storageClass", *storageClassName,
+		"handlerType", handlerType,
+		"apiGroup", handler.GetAPIGroup())
+
+	return handler, nil
 }
 
 // vgrHandlerShouldRefresh determines if handler refresh is needed based on error
