@@ -47,6 +47,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	ramendrv1alpha1 "github.com/ramendr/ramen/api/v1alpha1"
+	neutralv1alpha1 "github.com/ramendr/replication-storage-io-crds/api/v1alpha1"
 	ramencontrollers "github.com/ramendr/ramen/internal/controller"
 	argocdv1alpha1hack "github.com/ramendr/ramen/internal/controller/argocd"
 	testutils "github.com/ramendr/ramen/internal/controller/testutils"
@@ -205,6 +206,10 @@ var _ = BeforeSuite(func() {
 	Expect(err).NotTo(HaveOccurred())
 
 	err = csiaddonsv1alpha1.AddToScheme(scheme.Scheme)
+	Expect(err).NotTo(HaveOccurred())
+
+	// Add neutral replication API scheme for agnostic DR support
+	err = neutralv1alpha1.AddToScheme(scheme.Scheme)
 	Expect(err).NotTo(HaveOccurred())
 
 	err = volsyncv1alpha1.AddToScheme(scheme.Scheme)
