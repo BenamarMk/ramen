@@ -1,0 +1,241 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.18.0
+  name: volumegroupreplicationcontents.replication.storage.io
+spec:
+  group: replication.storage.io
+  names:
+    kind: VolumeGroupReplicationContent
+    listKind: VolumeGroupReplicationContentList
+    plural: volumegroupreplicationcontents
+    shortNames:
+    - vgrc
+    singular: volumegroupreplicationcontent
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    - jsonPath: .status.readyToUse
+      name: ReadyToUse
+      type: boolean
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          VolumeGroupReplicationContent represents the actual "on-disk" group snapshot object
+          in the underlying storage system
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: VolumeGroupReplicationContentSpec defines the desired state
+              of VolumeGroupReplicationContent
+            properties:
+              parameters:
+                additionalProperties:
+                  type: string
+                description: |-
+                  parameters is a key-value map with storage driver specific parameters for creating replications.
+                  These values are opaque to Kubernetes.
+                type: object
+              provisioner:
+                description: |-
+                  provisioner is the name of the CSI driver used to create the physical
+                  volume group snapshot on the underlying storage system.
+                  This MUST be the same as the name returned by the CSI GetPluginName() call for
+                  that driver.
+                  Required.
+                type: string
+              source:
+                description: |-
+                  source specifies whether the snapshot is (or should be) dynamically provisioned
+                  or already exists, and just requires a Kubernetes object representation.
+                  This field is immutable after creation.
+                  Required.
+                properties:
+                  volumeHandles:
+                    description: volumeHandles is a list of volume handles on the
+                      backend to be replicated.
+                    items:
+                      type: string
+                    type: array
+                type: object
+              volumeGroupReplicationClassName:
+                description: |-
+                  volumeGroupReplicationClassName is the name of the VolumeGroupReplicationClass from
+                  which this group snapshot was (or will be) created.
+                type: string
+              volumeGroupReplicationHandle:
+                description: |-
+                  volumeGroupReplicationHandle is a unique id returned by the CSI driver
+                  to identify the VolumeGroupReplication on the storage system.
+                type: string
+              volumeGroupReplicationRef:
+                description: |-
+                  volumeGroupReplicationRef specifies the VolumeGroupReplication object to which this
+                  VolumeGroupReplicationContent object is bound.
+                  VolumeGroupReplication.Spec.VolumeGroupReplicationContentName field must reference to
+                  this VolumeGroupReplicationContent's name for the bidirectional binding to be valid.
+                  For a pre-existing VolumeGroupReplicationContent object, name and namespace of the
+                  VolumeGroupReplication object MUST be provided for binding to happen.
+                  This field is immutable after creation.
+                  Required.
+                properties:
+                  apiVersion:
+                    description: API version of the referent.
+                    type: string
+                  fieldPath:
+                    description: |-
+                      If referring to a piece of an object instead of an entire object, this string
+                      should contain a valid JSON/Go field access statement, such as desiredState.manifest.containers[2].
+                      For example, if the object reference is to a container within a pod, this would take on a value like:
+                      "spec.containers{name}" (where "name" refers to the name of the container that triggered
+                      the event) or if no container name is specified "spec.containers[2]" (container with
+                      index 2 in this pod). This syntax is chosen only to have some well-defined way of
+                      referencing a part of an object.
+                    type: string
+                  kind:
+                    description: |-
+                      Kind of the referent.
+                      More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+                    type: string
+                  name:
+                    description: |-
+                      Name of the referent.
+                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                    type: string
+                  namespace:
+                    description: |-
+                      Namespace of the referent.
+                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/namespaces/
+                    type: string
+                  resourceVersion:
+                    description: |-
+                      Specific resourceVersion to which this reference is made, if any.
+                      More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#concurrency-control-and-consistency
+                    type: string
+                  uid:
+                    description: |-
+                      UID of the referent.
+                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#uids
+                    type: string
+                type: object
+                x-kubernetes-map-type: atomic
+            required:
+            - provisioner
+            - source
+            - volumeGroupReplicationClassName
+            - volumeGroupReplicationRef
+            type: object
+          status:
+            description: VolumeGroupReplicationContentStatus defines the status of
+              VolumeGroupReplicationContent
+            properties:
+              creationTime:
+                description: |-
+                  creationTime is the timestamp when the point-in-time group snapshot is taken
+                  by the underlying storage system.
+                  If not specified, it indicates the creation time is unknown.
+                  If not specified, it means the readiness of a group snapshot is unknown.
+                  The format of this field is a Unix nanoseconds time encoded as an int64.
+                  On Unix, the command date +%s%N returns the current time in nanoseconds
+                  since 1970-01-01 00:00:00 UTC.
+                format: int64
+                type: integer
+              error:
+                description: |-
+                  error is the last observed error during group snapshot creation, if any.
+                  Upon success after retry, this error field will be cleared.
+                properties:
+                  message:
+                    description: |-
+                      message is a string detailing the encountered error during snapshot
+                      creation if specified.
+                      NOTE: message may be logged, and it should not contain sensitive
+                      information.
+                    type: string
+                  time:
+                    description: time is the timestamp when the error was encountered.
+                    format: date-time
+                    type: string
+                type: object
+              persistentVolumeReplicationContentRefList:
+                description: persistentVolumeReplicationContentRefList is the list
+                  of PV replication content references for this group replication.
+                items:
+                  description: |-
+                    LocalObjectReference contains enough information to let you locate the
+                    referenced object inside the same namespace.
+                  properties:
+                    name:
+                      default: ""
+                      description: |-
+                        Name of the referent.
+                        This field is effectively required, but due to backwards compatibility is
+                        allowed to be empty. Instances of this type with an empty value here are
+                        almost certainly wrong.
+                        More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                      type: string
+                  type: object
+                  x-kubernetes-map-type: atomic
+                type: array
+              readyToUse:
+                description: |-
+                  readyToUse indicates if all the individual snapshots in the group are ready
+                  to be used to restore a group of volumes.
+                  ReadyToUse becomes true when ReadyToUse of all individual snapshots become true.
+                  If not specified, it means the readiness of a group snapshot is unknown.
+                type: boolean
+              volumeGroupReplicationHandle:
+                description: |-
+                  volumeGroupReplicationHandle is a unique id returned by the CSI driver
+                  to identify the VolumeGroupReplication on the storage system.
+                  If a storage system does not provide such an id, the
+                  CSI driver can choose to return the VolumeGroupReplication name.
+                type: string
+              volumeReplicationContentRefList:
+                description: |-
+                  volumeReplicationContentRefList is the list of volume replication content references for this group replication.
+                  The maximum number of allowed volume replication contents in the group is 100.
+                items:
+                  description: |-
+                    LocalObjectReference contains enough information to let you locate the
+                    referenced object inside the same namespace.
+                  properties:
+                    name:
+                      default: ""
+                      description: |-
+                        Name of the referent.
+                        This field is effectively required, but due to backwards compatibility is
+                        allowed to be empty. Instances of this type with an empty value here are
+                        almost certainly wrong.
+                        More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                      type: string
+                  type: object
+                  x-kubernetes-map-type: atomic
+                type: array
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources: {}
