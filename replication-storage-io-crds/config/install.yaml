@@ -1,0 +1,601 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.18.0
+    replication.storage.io/maintainer: ramendr
+    replication.storage.io/version: v1alpha1
+  labels:
+    app.kubernetes.io/component: crd
+    app.kubernetes.io/name: replication-storage-io
+    app.kubernetes.io/part-of: kubernetes-storage
+  name: volumegroupreplicationclasses.replication.storage.io
+spec:
+  group: replication.storage.io
+  names:
+    kind: VolumeGroupReplicationClass
+    listKind: VolumeGroupReplicationClassList
+    plural: volumegroupreplicationclasses
+    shortNames:
+    - vgrclass
+    singular: volumegroupreplicationclass
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.provisioner
+      name: Provisioner
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: VolumeGroupReplicationClass is the Schema for the volumegroupreplicationclasses
+          API
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: VolumeGroupReplicationClassSpec defines the desired state
+              of VolumeGroupReplicationClass
+            properties:
+              parameters:
+                additionalProperties:
+                  type: string
+                description: |-
+                  parameters is a key-value map with storage provisioner specific configurations for
+                  creating volume replications
+                type: object
+              provisioner:
+                description: provisioner is the name of storage provisioner
+                type: string
+            required:
+            - provisioner
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources: {}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.18.0
+    replication.storage.io/maintainer: ramendr
+    replication.storage.io/version: v1alpha1
+  labels:
+    app.kubernetes.io/component: crd
+    app.kubernetes.io/name: replication-storage-io
+    app.kubernetes.io/part-of: kubernetes-storage
+  name: volumegroupreplicationcontents.replication.storage.io
+spec:
+  group: replication.storage.io
+  names:
+    kind: VolumeGroupReplicationContent
+    listKind: VolumeGroupReplicationContentList
+    plural: volumegroupreplicationcontents
+    shortNames:
+    - vgrc
+    singular: volumegroupreplicationcontent
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    - jsonPath: .status.readyToUse
+      name: ReadyToUse
+      type: boolean
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          VolumeGroupReplicationContent represents the actual "on-disk" group snapshot object
+          in the underlying storage system
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: VolumeGroupReplicationContentSpec defines the desired state
+              of VolumeGroupReplicationContent
+            properties:
+              parameters:
+                additionalProperties:
+                  type: string
+                description: |-
+                  parameters is a key-value map with storage driver specific parameters for creating replications.
+                  These values are opaque to Kubernetes.
+                type: object
+              provisioner:
+                description: |-
+                  provisioner is the name of the CSI driver used to create the physical
+                  volume group snapshot on the underlying storage system.
+                  This MUST be the same as the name returned by the CSI GetPluginName() call for
+                  that driver.
+                  Required.
+                type: string
+              source:
+                description: |-
+                  source specifies whether the snapshot is (or should be) dynamically provisioned
+                  or already exists, and just requires a Kubernetes object representation.
+                  This field is immutable after creation.
+                  Required.
+                properties:
+                  volumeHandles:
+                    description: volumeHandles is a list of volume handles on the
+                      backend to be replicated.
+                    items:
+                      type: string
+                    type: array
+                type: object
+              volumeGroupReplicationClassName:
+                description: |-
+                  volumeGroupReplicationClassName is the name of the VolumeGroupReplicationClass from
+                  which this group snapshot was (or will be) created.
+                type: string
+              volumeGroupReplicationHandle:
+                description: |-
+                  volumeGroupReplicationHandle is a unique id returned by the CSI driver
+                  to identify the VolumeGroupReplication on the storage system.
+                type: string
+              volumeGroupReplicationRef:
+                description: |-
+                  volumeGroupReplicationRef specifies the VolumeGroupReplication object to which this
+                  VolumeGroupReplicationContent object is bound.
+                  VolumeGroupReplication.Spec.VolumeGroupReplicationContentName field must reference to
+                  this VolumeGroupReplicationContent's name for the bidirectional binding to be valid.
+                  For a pre-existing VolumeGroupReplicationContent object, name and namespace of the
+                  VolumeGroupReplication object MUST be provided for binding to happen.
+                  This field is immutable after creation.
+                  Required.
+                properties:
+                  apiVersion:
+                    description: API version of the referent.
+                    type: string
+                  fieldPath:
+                    description: |-
+                      If referring to a piece of an object instead of an entire object, this string
+                      should contain a valid JSON/Go field access statement, such as desiredState.manifest.containers[2].
+                      For example, if the object reference is to a container within a pod, this would take on a value like:
+                      "spec.containers{name}" (where "name" refers to the name of the container that triggered
+                      the event) or if no container name is specified "spec.containers[2]" (container with
+                      index 2 in this pod). This syntax is chosen only to have some well-defined way of
+                      referencing a part of an object.
+                    type: string
+                  kind:
+                    description: |-
+                      Kind of the referent.
+                      More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+                    type: string
+                  name:
+                    description: |-
+                      Name of the referent.
+                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                    type: string
+                  namespace:
+                    description: |-
+                      Namespace of the referent.
+                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/namespaces/
+                    type: string
+                  resourceVersion:
+                    description: |-
+                      Specific resourceVersion to which this reference is made, if any.
+                      More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#concurrency-control-and-consistency
+                    type: string
+                  uid:
+                    description: |-
+                      UID of the referent.
+                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#uids
+                    type: string
+                type: object
+                x-kubernetes-map-type: atomic
+            required:
+            - provisioner
+            - source
+            - volumeGroupReplicationClassName
+            - volumeGroupReplicationRef
+            type: object
+          status:
+            description: VolumeGroupReplicationContentStatus defines the status of
+              VolumeGroupReplicationContent
+            properties:
+              creationTime:
+                description: |-
+                  creationTime is the timestamp when the point-in-time group snapshot is taken
+                  by the underlying storage system.
+                  If not specified, it indicates the creation time is unknown.
+                  If not specified, it means the readiness of a group snapshot is unknown.
+                  The format of this field is a Unix nanoseconds time encoded as an int64.
+                  On Unix, the command date +%s%N returns the current time in nanoseconds
+                  since 1970-01-01 00:00:00 UTC.
+                format: int64
+                type: integer
+              error:
+                description: |-
+                  error is the last observed error during group snapshot creation, if any.
+                  Upon success after retry, this error field will be cleared.
+                properties:
+                  message:
+                    description: |-
+                      message is a string detailing the encountered error during snapshot
+                      creation if specified.
+                      NOTE: message may be logged, and it should not contain sensitive
+                      information.
+                    type: string
+                  time:
+                    description: time is the timestamp when the error was encountered.
+                    format: date-time
+                    type: string
+                type: object
+              persistentVolumeReplicationContentRefList:
+                description: persistentVolumeReplicationContentRefList is the list
+                  of PV replication content references for this group replication.
+                items:
+                  description: |-
+                    LocalObjectReference contains enough information to let you locate the
+                    referenced object inside the same namespace.
+                  properties:
+                    name:
+                      default: ""
+                      description: |-
+                        Name of the referent.
+                        This field is effectively required, but due to backwards compatibility is
+                        allowed to be empty. Instances of this type with an empty value here are
+                        almost certainly wrong.
+                        More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                      type: string
+                  type: object
+                  x-kubernetes-map-type: atomic
+                type: array
+              readyToUse:
+                description: |-
+                  readyToUse indicates if all the individual snapshots in the group are ready
+                  to be used to restore a group of volumes.
+                  ReadyToUse becomes true when ReadyToUse of all individual snapshots become true.
+                  If not specified, it means the readiness of a group snapshot is unknown.
+                type: boolean
+              volumeGroupReplicationHandle:
+                description: |-
+                  volumeGroupReplicationHandle is a unique id returned by the CSI driver
+                  to identify the VolumeGroupReplication on the storage system.
+                  If a storage system does not provide such an id, the
+                  CSI driver can choose to return the VolumeGroupReplication name.
+                type: string
+              volumeReplicationContentRefList:
+                description: |-
+                  volumeReplicationContentRefList is the list of volume replication content references for this group replication.
+                  The maximum number of allowed volume replication contents in the group is 100.
+                items:
+                  description: |-
+                    LocalObjectReference contains enough information to let you locate the
+                    referenced object inside the same namespace.
+                  properties:
+                    name:
+                      default: ""
+                      description: |-
+                        Name of the referent.
+                        This field is effectively required, but due to backwards compatibility is
+                        allowed to be empty. Instances of this type with an empty value here are
+                        almost certainly wrong.
+                        More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                      type: string
+                  type: object
+                  x-kubernetes-map-type: atomic
+                type: array
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources: {}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.18.0
+    replication.storage.io/maintainer: ramendr
+    replication.storage.io/version: v1alpha1
+  labels:
+    app.kubernetes.io/component: crd
+    app.kubernetes.io/name: replication-storage-io
+    app.kubernetes.io/part-of: kubernetes-storage
+  name: volumegroupreplications.replication.storage.io
+spec:
+  group: replication.storage.io
+  names:
+    kind: VolumeGroupReplication
+    listKind: VolumeGroupReplicationList
+    plural: volumegroupreplications
+    shortNames:
+    - vgr
+    singular: volumegroupreplication
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    - jsonPath: .spec.replicationState
+      name: ReplicationState
+      type: string
+    - jsonPath: .status.state
+      name: State
+      type: string
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: VolumeGroupReplication is the Schema for the volumegroupreplications
+          API
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: VolumeGroupReplicationSpec defines the desired state of VolumeGroupReplication
+            properties:
+              autoResync:
+                description: |-
+                  autoResync represents the group to be auto resynced when
+                  ReplicationState is "secondary"
+                type: boolean
+              replicationHandle:
+                description: replicationHandle represents an existing (but new) replication
+                  id
+                type: string
+              replicationState:
+                description: |-
+                  replicationState represents the replication operation to be performed on the volume group.
+                  Supported operations are "primary", "secondary" and "resync"
+                enum:
+                - primary
+                - secondary
+                - resync
+                type: string
+              source:
+                description: |-
+                  source specifies where a group snapshot will be created from.
+                  This field is immutable after creation.
+                  Required.
+                properties:
+                  selector:
+                    description: |-
+                      selector is a label query over persistent volume claims that are to be
+                      grouped together for replication.
+                    properties:
+                      matchExpressions:
+                        description: matchExpressions is a list of label selector
+                          requirements. The requirements are ANDed.
+                        items:
+                          description: |-
+                            A label selector requirement is a selector that contains values, a key, and an operator that
+                            relates the key and values.
+                          properties:
+                            key:
+                              description: key is the label key that the selector
+                                applies to.
+                              type: string
+                            operator:
+                              description: |-
+                                operator represents a key's relationship to a set of values.
+                                Valid operators are In, NotIn, Exists and DoesNotExist.
+                              type: string
+                            values:
+                              description: |-
+                                values is an array of string values. If the operator is In or NotIn,
+                                the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                the values array must be empty. This array is replaced during a strategic
+                                merge patch.
+                              items:
+                                type: string
+                              type: array
+                              x-kubernetes-list-type: atomic
+                          required:
+                          - key
+                          - operator
+                          type: object
+                        type: array
+                        x-kubernetes-list-type: atomic
+                      matchLabels:
+                        additionalProperties:
+                          type: string
+                        description: |-
+                          matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+                          map is equivalent to an element of matchExpressions, whose key field is "key", the
+                          operator is "In", and the values array contains only "value". The requirements are ANDed.
+                        type: object
+                    type: object
+                    x-kubernetes-map-type: atomic
+                  volumeGroupReplicationContentName:
+                    description: |-
+                      volumeReplicationContentName specifies the name of a pre-existing VolumeReplicationContent
+                      object representing an existing volume group snapshot.
+                      This field should be set if the volume group snapshot already exists and
+                      only needs a representation in Kubernetes.
+                      This field is immutable.
+                    type: string
+                type: object
+              volumeGroupReplicationClassName:
+                description: volumeGroupReplicationClassName is the name of the VolumeGroupReplicationClass
+                type: string
+              volumeGroupReplicationContentName:
+                description: volumeGroupReplicationContentName is the name of the
+                  VolumeGroupReplicationContent object
+                type: string
+            required:
+            - replicationState
+            - source
+            - volumeGroupReplicationClassName
+            type: object
+          status:
+            description: VolumeGroupReplicationStatus defines the observed state of
+              VolumeGroupReplication
+            properties:
+              conditions:
+                description: |-
+                  conditions represent the latest available observations of the
+                  volume group replication's current state.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              lastCompletionTime:
+                description: lastCompletionTime is the time of the last successful
+                  synchronization.
+                format: date-time
+                type: string
+              lastStartTime:
+                description: lastStartTime is the time the last synchronization started.
+                format: date-time
+                type: string
+              lastSyncBytes:
+                description: lastSyncBytes is the number of bytes transferred during
+                  the last successful synchronization.
+                format: int64
+                type: integer
+              lastSyncDuration:
+                description: lastSyncDuration is the duration of the last successful
+                  synchronization.
+                type: string
+              lastSyncTime:
+                description: lastSyncTime is the time of the last successful synchronization.
+                format: date-time
+                type: string
+              message:
+                description: message contains any message from the underlying storage
+                  system
+                type: string
+              observedGeneration:
+                description: observedGeneration is the last generation change the
+                  operator has dealt with
+                format: int64
+                type: integer
+              persistentVolumeClaimsRefList:
+                description: |-
+                  persistentVolumeClaimsRefList is the list of PVCs for the volume group replication.
+                  The maximum number of allowed PVCs in the group is 100.
+                items:
+                  description: |-
+                    LocalObjectReference contains enough information to let you locate the
+                    referenced object inside the same namespace.
+                  properties:
+                    name:
+                      default: ""
+                      description: |-
+                        Name of the referent.
+                        This field is effectively required, but due to backwards compatibility is
+                        allowed to be empty. Instances of this type with an empty value here are
+                        almost certainly wrong.
+                        More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                      type: string
+                  type: object
+                  x-kubernetes-map-type: atomic
+                type: array
+              state:
+                description: state captures the latest state of the replication operation.
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

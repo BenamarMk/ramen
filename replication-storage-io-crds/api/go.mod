@@ -1,4 +1,4 @@
-module github.com/ramendr/ramen/api/replication.storage.io
+module github.com/ramendr/replication-storage-io-crds/api
 
 go 1.24.0
 

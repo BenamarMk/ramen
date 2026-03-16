@@ -1,0 +1,17 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+- crds/replication.storage.io_volumegroupreplicationclasses.yaml
+- crds/replication.storage.io_volumegroupreplications.yaml
+- crds/replication.storage.io_volumegroupreplicationcontents.yaml
+
+labels:
+- pairs:
+    app.kubernetes.io/name: replication-storage-io
+    app.kubernetes.io/part-of: kubernetes-storage
+    app.kubernetes.io/component: crd
+
+commonAnnotations:
+  replication.storage.io/version: v1alpha1
+  replication.storage.io/maintainer: ramendr

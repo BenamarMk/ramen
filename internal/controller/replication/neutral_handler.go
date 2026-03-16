@@ -7,7 +7,7 @@ import (
 	"context"
 	"fmt"
 
-	replicationv1alpha1 "github.com/ramendr/ramen/api/replication.storage.io/v1alpha1"
+	replicationv1alpha1 "github.com/ramendr/replication-storage-io-crds/api/v1alpha1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
