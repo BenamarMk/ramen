@@ -19,6 +19,7 @@ import (
 	storagev1 "k8s.io/api/storage/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/util/workqueue"
 	clusterv1alpha1 "open-cluster-management.io/api/cluster/v1alpha1"
@@ -31,6 +32,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	ramen "github.com/ramendr/ramen/api/v1alpha1"
+	"github.com/ramendr/ramen/internal/controller/replication"
 	"github.com/ramendr/ramen/internal/controller/util"
 )
 
@@ -403,21 +405,49 @@ func (r *DRClusterConfigReconciler) listDRSupportedVRCs(ctx context.Context) ([]
 	return vrcs, nil
 }
 
-// listDRSupportedVGRCs returns a list of VolumeGroupReplicationClasses that are marked as DR supported
+// listDRSupportedVGRCs returns a list of VolumeGroupReplicationClasses that are marked as DR supported.
+// This function supports both legacy (replication.storage.openshift.io) and neutral (replication.storage.io) APIs.
 func (r *DRClusterConfigReconciler) listDRSupportedVGRCs(ctx context.Context) ([]string, error) {
 	vgrcs := []string{}
 
-	vgrClasses := &volrep.VolumeGroupReplicationClassList{}
-	if err := r.Client.List(ctx, vgrClasses); err != nil {
-		return nil, fmt.Errorf("failed to list VolumeGroupReplicationClasses, %w", err)
+	// List legacy VGRCs (replication.storage.openshift.io)
+	legacyVGRCs := &volrep.VolumeGroupReplicationClassList{}
+	if err := r.Client.List(ctx, legacyVGRCs); err != nil {
+		// If the CRD doesn't exist, that's okay - just skip it
+		if client.IgnoreNotFound(err) != nil {
+			return nil, fmt.Errorf("failed to list legacy VolumeGroupReplicationClasses: %w", err)
+		}
+	} else {
+		for i := range legacyVGRCs.Items {
+			if !util.HasLabel(&legacyVGRCs.Items[i], GroupReplicationIDLabel) {
+				continue
+			}
+			vgrcs = append(vgrcs, legacyVGRCs.Items[i].Name)
+		}
 	}
 
-	for i := range vgrClasses.Items {
-		if !util.HasLabel(&vgrClasses.Items[i], GroupReplicationIDLabel) {
-			continue
-		}
+	// List neutral VGRCs (replication.storage.io) using unstructured
+	neutralGVK := schema.GroupVersionKind{
+		Group:   replication.NeutralAPIGroup,
+		Version: "v1alpha1",
+		Kind:    "VolumeGroupReplicationClass",
+	}
 
-		vgrcs = append(vgrcs, vgrClasses.Items[i].Name)
+	neutralVGRCs := &metav1.PartialObjectMetadataList{}
+	neutralVGRCs.SetGroupVersionKind(neutralGVK)
+
+	if err := r.Client.List(ctx, neutralVGRCs); err != nil {
+		// If the CRD doesn't exist, that's okay - just skip it
+		if client.IgnoreNotFound(err) != nil {
+			return nil, fmt.Errorf("failed to list neutral VolumeGroupReplicationClasses: %w", err)
+		}
+	} else {
+		for i := range neutralVGRCs.Items {
+			if !util.HasLabel(&neutralVGRCs.Items[i], GroupReplicationIDLabel) {
+				continue
+			}
+			vgrcs = append(vgrcs, neutralVGRCs.Items[i].Name)
+		}
 	}
 
 	return vgrcs, nil
