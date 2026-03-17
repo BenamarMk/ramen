@@ -19,21 +19,27 @@ import (
 )
 
 // classLists contains [storage|snapshot|replication]classes from ManagedClusters with the required ramen storageID or,
-// replicationID labels
+// replicationID labels.
 //
-// TODO (Agnostic DR - Step 3.4): Enhance PeerClass discovery to support both legacy and neutral APIs
-// Currently uses legacy API (replication.storage.openshift.io) exclusively.
-// Future enhancement needed:
-// - Add neutral API (replication.storage.io) support alongside legacy
-// - Use replication handler interface for VGRClass discovery
-// - Maintain backward compatibility during transition
-// - Priority: Neutral API > Legacy API (consistent with handler discovery)
+// Agnostic DR Support (Phase 1 - Implemented):
+// The vgrClasses field now supports both neutral (replication.storage.io) and legacy
+// (replication.storage.openshift.io) APIs through automatic discovery and fallback in
+// GetVGRClassFromManagedCluster.
+//
+// API Discovery Flow:
+// 1. getVGRClassesFromCluster retrieves VGRClass names from DRClusterConfig
+// 2. For each name, GetVGRClassFromManagedCluster tries neutral API first
+// 3. If neutral API not available, automatically falls back to legacy API
+// 4. vgrClasses contains unified list regardless of source API
+//
+// This enables smooth transition without breaking existing ODF deployments while
+// allowing new deployments to use the vendor-neutral API.
 type classLists struct {
 	clusterID  string
 	sClasses   []*storagev1.StorageClass
 	vsClasses  []*snapv1.VolumeSnapshotClass
 	vrClasses  []*volrep.VolumeReplicationClass
-	vgrClasses []*volrep.VolumeGroupReplicationClass // TODO: Support neutral API VGRClasses
+	vgrClasses []*volrep.VolumeGroupReplicationClass // Supports both neutral and legacy APIs via auto-discovery
 	vgsClasses []*groupsnapv1beta1.VolumeGroupSnapshotClass
 }
 
@@ -706,15 +712,20 @@ func pruneVGSClassViews(
 	return pruneClassViews(m, log, clusterName, survivorClassNames, mcvList)
 }
 
-// getVGRClassesFromCluster gets VolumeGroupReplicationClasses that are claimed in the DRClusterConfig status
+// getVGRClassesFromCluster gets VolumeGroupReplicationClasses that are claimed in the DRClusterConfig status.
 //
-// TODO (Agnostic DR - Step 3.4): Enhance to support neutral API VGRClasses
-// Current implementation only retrieves legacy API (replication.storage.openshift.io) VGRClasses.
-// Future enhancement:
-// - Check for neutral API (replication.storage.io) VGRClasses first
-// - Fall back to legacy API if neutral not available
-// - Use replication handler's DiscoverVGRClasses method
-// - Return unified list supporting both APIs during transition
+// This function now supports both neutral (replication.storage.io) and legacy
+// (replication.storage.openshift.io) APIs through the GetVGRClassFromManagedCluster method,
+// which automatically tries neutral API first and falls back to legacy if needed.
+//
+// API Discovery Flow:
+// 1. For each VGRClass name in DRClusterConfig status
+// 2. GetVGRClassFromManagedCluster tries neutral API (replication.storage.io)
+// 3. If neutral API not found, automatically falls back to legacy API
+// 4. Returns unified list of VGRClasses regardless of source API
+//
+// This enables smooth transition from legacy to neutral API without breaking existing deployments.
+// During the transition period, clusters may have VGRClasses from either or both APIs.
 func getVGRClassesFromCluster(
 	u *drpolicyUpdater,
 	m util.ManagedClusterViewGetter,
@@ -732,6 +743,8 @@ func getVGRClassesFromCluster(
 	annotations[AllDRPolicyAnnotation] = clusterName
 
 	for _, vgrcName := range vgrClassNames {
+		// GetVGRClassFromManagedCluster now supports both neutral and legacy APIs
+		// It tries neutral API first, then falls back to legacy if needed
 		sClass, err := m.GetVGRClassFromManagedCluster(vgrcName, clusterName, annotations)
 		if err != nil {
 			return []*volrep.VolumeGroupReplicationClass{}, err

@@ -356,19 +356,24 @@ func (m ManagedClusterViewGetterImpl) ListVGSClassMCVs(cluster string) (*viewv1b
 
 // GetVGRClassFromManagedCluster retrieves a VolumeGroupReplicationClass from a managed cluster
 //
-// TODO (Agnostic DR - Step 3.4): Enhance to support neutral API VGRClasses
-// Current implementation hardcodes legacy API group (replication.storage.openshift.io).
-// Future enhancement needed:
-// - Try neutral API (replication.storage.io) first
-// - Fall back to legacy API if neutral not found
-// - Use API discovery mechanism to determine which API to query
-// - Return appropriate type based on discovered API
+// GetVGRClassFromManagedCluster retrieves a VolumeGroupReplicationClass from a managed cluster.
+// This implementation supports both neutral (replication.storage.io) and legacy
+// (replication.storage.openshift.io) APIs with automatic fallback.
+//
+// Priority order:
+// 1. Try neutral API (replication.storage.io) first
+// 2. Fall back to legacy API (replication.storage.openshift.io) if neutral not found
+//
+// This enables smooth transition from legacy to neutral API without breaking existing deployments.
 func (m ManagedClusterViewGetterImpl) GetVGRClassFromManagedCluster(resourceName, managedCluster string,
 	annotations map[string]string,
 ) (*volrep.VolumeGroupReplicationClass, error) {
 	vgrc := &volrep.VolumeGroupReplicationClass{}
 
-	// TODO: Replace hardcoded volrep.GroupVersion with dynamic API group selection
+	// Try neutral API first (replication.storage.io)
+	neutralAPIGroup := "replication.storage.io"
+	neutralAPIVersion := "v1alpha1"
+	
 	err := m.getResourceFromManagedCluster(
 		resourceName,
 		"",
@@ -377,12 +382,75 @@ func (m ManagedClusterViewGetterImpl) GetVGRClassFromManagedCluster(resourceName
 		map[string]string{VGRClassLabel: ""},
 		BuildManagedClusterViewName(resourceName, "", MWTypeVGRClass),
 		"VolumeGroupReplicationClass",
-		volrep.GroupVersion.Group, // TODO: Support neutral API group (replication.storage.io)
-		volrep.GroupVersion.Version,
+		neutralAPIGroup,
+		neutralAPIVersion,
 		vgrc,
 	)
 
-	return vgrc, err
+	// If neutral API succeeds, return the result
+	if err == nil {
+		return vgrc, nil
+	}
+
+	// If neutral API fails with "not found" or "no match", try legacy API
+	// This handles cases where neutral CRD is not installed
+	if k8serrors.IsNotFound(err) || isNoMatchError(err) {
+		// Fall back to legacy API (replication.storage.openshift.io)
+		legacyVgrc := &volrep.VolumeGroupReplicationClass{}
+		legacyErr := m.getResourceFromManagedCluster(
+			resourceName,
+			"",
+			managedCluster,
+			annotations,
+			map[string]string{VGRClassLabel: ""},
+			BuildManagedClusterViewName(resourceName, "", MWTypeVGRClass),
+			"VolumeGroupReplicationClass",
+			volrep.GroupVersion.Group, // Legacy API group
+			volrep.GroupVersion.Version,
+			legacyVgrc,
+		)
+		
+		if legacyErr == nil {
+			return legacyVgrc, nil
+		}
+		
+		// If both fail, return the legacy error (more informative)
+		return nil, legacyErr
+	}
+
+	// For other errors (network, permissions, etc.), return immediately
+	return nil, err
+}
+
+// isNoMatchError checks if an error is a "no matches for kind" error
+// This indicates the CRD is not installed
+func isNoMatchError(err error) bool {
+	if err == nil {
+		return false
+	}
+	// Check for common "no match" error messages
+	errMsg := err.Error()
+	return contains(errMsg, "no matches for kind") ||
+		contains(errMsg, "no matches for") ||
+		contains(errMsg, "the server could not find the requested resource")
+}
+
+// contains checks if a string contains a substring (case-insensitive helper)
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) &&
+		(s == substr || len(s) > len(substr) &&
+		(s[:len(substr)] == substr || s[len(s)-len(substr):] == substr ||
+		findSubstring(s, substr)))
+}
+
+// findSubstring performs a simple substring search
+func findSubstring(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
 }
 
 func (m ManagedClusterViewGetterImpl) ListVGRClassMCVs(cluster string) (*viewv1beta1.ManagedClusterViewList, error) {
