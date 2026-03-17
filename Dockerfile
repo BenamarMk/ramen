@@ -9,6 +9,9 @@ WORKDIR /workspace
 COPY go.mod go.mod
 COPY go.sum go.sum
 COPY api/ api/
+# Copy neutral API package (only needed if running tests in Docker)
+# Production code uses unstructured types and doesn't require this at runtime
+COPY replication-storage-io-crds/api/ replication-storage-io-crds/api/
 # cache deps before building and copying source so that we don't need to re-download as much
 # and so that source changes don't invalidate our downloaded layer
 RUN go mod download

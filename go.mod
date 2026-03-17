@@ -9,8 +9,8 @@ toolchain go1.24.5
 // This replace should always be here for ease of development.
 replace github.com/ramendr/ramen/api => ./api
 
-// Optional: Only needed for running tests that use typed neutral API structs
-// Production code uses unstructured types and doesn't require this package
+// Test-only dependency: Neutral API types for test convenience
+// Production code uses unstructured types and doesn't require this at runtime
 replace github.com/ramendr/replication-storage-io-crds/api => ./replication-storage-io-crds/api
 
 require (
