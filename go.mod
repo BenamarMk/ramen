@@ -9,8 +9,8 @@ toolchain go1.24.5
 // This replace should always be here for ease of development.
 replace github.com/ramendr/ramen/api => ./api
 
-// Use local standalone package for development
-// In production, this should point to the published package
+// Optional: Only needed for running tests that use typed neutral API structs
+// Production code uses unstructured types and doesn't require this package
 replace github.com/ramendr/replication-storage-io-crds/api => ./replication-storage-io-crds/api
 
 require (
