@@ -444,17 +444,25 @@ func (r *VolumeReplicationGroupReconciler) Reconcile(ctx context.Context, req ct
 	defer log.Info("Exiting reconcile loop")
 
 	v := VRGInstance{
-		reconciler:        r,
-		ctx:               ctx,
-		log:               log,
-		instance:          &ramendrv1alpha1.VolumeReplicationGroup{},
-		volRepPVCs:        []corev1.PersistentVolumeClaim{},
-		volSyncPVCs:       []corev1.PersistentVolumeClaim{},
-		replClassList:     &volrep.VolumeReplicationClassList{},
-		grpReplClassList:  &volrep.VolumeGroupReplicationClassList{},
-		namespacedName:    req.NamespacedName.String(),
-		objectStorers:     make(map[string]cachedObjectStorer),
-		storageClassCache: make(map[string]*storagev1.StorageClass),
+		reconciler:           r,
+		ctx:                  ctx,
+		log:                  log,
+		instance:             &ramendrv1alpha1.VolumeReplicationGroup{},
+		volRepPVCs:           []corev1.PersistentVolumeClaim{},
+		volSyncPVCs:          []corev1.PersistentVolumeClaim{},
+		replClassList:        &volrep.VolumeReplicationClassList{},
+		grpReplClassList:     &volrep.VolumeGroupReplicationClassList{},
+		replicationFactory:   replication.NewReplicationFactory(ctx, r.Client),
+		namespacedName:       req.NamespacedName.String(),
+		objectStorers:        make(map[string]cachedObjectStorer),
+		storageClassCache:    make(map[string]*storagev1.StorageClass),
+	}
+
+	// Log which CRD type is being used
+	if v.replicationFactory.IsUsingVolrep() {
+		log.Info("Using VolumeGroupReplication CRDs from csi-addons (replication.storage.openshift.io)")
+	} else {
+		log.Info("Using VolumeGroupReplication CRDs from neutral implementation (replication.storage.io)")
 	}
 
 	// Fetch the VolumeReplicationGroup instance
@@ -523,6 +531,7 @@ type VRGInstance struct {
 	volSyncPVCs          []corev1.PersistentVolumeClaim
 	replClassList        *volrep.VolumeReplicationClassList
 	grpReplClassList     *volrep.VolumeGroupReplicationClassList
+	replicationFactory   *replication.ReplicationFactory
 	storageClassCache    map[string]*storagev1.StorageClass
 	vrgObjectProtected   *metav1.Condition
 	kubeObjectsProtected *metav1.Condition
