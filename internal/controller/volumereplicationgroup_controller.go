@@ -17,6 +17,7 @@ import (
 	volsyncv1alpha1 "github.com/backube/volsync/api/v1alpha1"
 	volrep "github.com/csi-addons/kubernetes-csi-addons/api/replication.storage/v1alpha1"
 	"github.com/go-logr/logr"
+	neutral "github.com/ramendr/replication-storage-io-crds/api/v1alpha1"
 	snapv1 "github.com/kubernetes-csi/external-snapshotter/client/v8/apis/volumesnapshot/v1"
 	"golang.org/x/time/rate"
 	corev1 "k8s.io/api/core/v1"
@@ -43,6 +44,7 @@ import (
 	ramendrv1alpha1 "github.com/ramendr/ramen/api/v1alpha1"
 	recipecore "github.com/ramendr/ramen/internal/controller/core"
 	"github.com/ramendr/ramen/internal/controller/kubeobjects"
+	"github.com/ramendr/ramen/internal/controller/replication"
 	"github.com/ramendr/ramen/internal/controller/kubeobjects/velero"
 	"github.com/ramendr/ramen/internal/controller/util"
 	"github.com/ramendr/ramen/internal/controller/volsync"
@@ -96,21 +98,38 @@ func (r *VolumeReplicationGroupReconciler) SetupWithManager(
 				),
 			),
 		).
-		Watches(&corev1.PersistentVolumeClaim{},
-			handler.EnqueueRequestsFromMapFunc(r.pvcMapFunc),
-			builder.WithPredicates(pvcPredicateFunc()),
-		).
-		Watches(&volrep.VolumeReplication{},
-			handler.EnqueueRequestsFromMapFunc(r.VRMapFunc),
-			builder.WithPredicates(util.CreateOrDeleteOrResourceVersionUpdatePredicate{}),
-		).
-		Watches(&volrep.VolumeGroupReplication{},
-			handler.EnqueueRequestsFromMapFunc(r.VGRMapFunc),
-			builder.WithPredicates(util.CreateOrDeleteOrResourceVersionUpdatePredicate{}),
-		).
-		Watches(&corev1.ConfigMap{}, handler.EnqueueRequestsFromMapFunc(r.configMapFun)).
-		Owns(&volrep.VolumeReplication{}).
-		Owns(&volrep.VolumeGroupReplication{})
+			Watches(&corev1.PersistentVolumeClaim{},
+				handler.EnqueueRequestsFromMapFunc(r.pvcMapFunc),
+				builder.WithPredicates(pvcPredicateFunc()),
+			).
+			Watches(&volrep.VolumeReplication{},
+				handler.EnqueueRequestsFromMapFunc(r.VRMapFunc),
+				builder.WithPredicates(util.CreateOrDeleteOrResourceVersionUpdatePredicate{}),
+			).
+			Watches(&corev1.ConfigMap{}, handler.EnqueueRequestsFromMapFunc(r.configMapFun)).
+			Owns(&volrep.VolumeReplication{})
+	
+		// Add conditional watches for VolumeGroupReplication based on CRD availability
+		ctx := context.Background()
+		crdDetector := replication.NewCRDDetector(mgr.GetClient())
+	
+		if crdDetector.IsVolumeGroupReplicationAvailable(ctx) {
+			r.Log.Info("VolumeGroupReplication CRD from csi-addons detected, using volrep types")
+			ctrlBuilder = ctrlBuilder.
+				Watches(&volrep.VolumeGroupReplication{},
+					handler.EnqueueRequestsFromMapFunc(r.VGRMapFunc),
+					builder.WithPredicates(util.CreateOrDeleteOrResourceVersionUpdatePredicate{}),
+				).
+				Owns(&volrep.VolumeGroupReplication{})
+		} else {
+			r.Log.Info("VolumeGroupReplication CRD from csi-addons not found, using neutral types from replication.storage.io")
+			ctrlBuilder = ctrlBuilder.
+				Watches(&neutral.VolumeGroupReplication{},
+					handler.EnqueueRequestsFromMapFunc(r.VGRMapFunc),
+					builder.WithPredicates(util.CreateOrDeleteOrResourceVersionUpdatePredicate{}),
+				).
+				Owns(&neutral.VolumeGroupReplication{})
+		}
 
 	if !ramenConfig.VolSync.Disabled {
 		r.Log.Info("VolSync enabled; adding owns and watches")

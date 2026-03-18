@@ -13,6 +13,7 @@ import (
 	csiaddonsv1alpha1 "github.com/csi-addons/kubernetes-csi-addons/api/csiaddons/v1alpha1"
 	volrep "github.com/csi-addons/kubernetes-csi-addons/api/replication.storage/v1alpha1"
 	"github.com/go-logr/logr"
+	neutral "github.com/ramendr/replication-storage-io-crds/api/v1alpha1"
 	snapv1 "github.com/kubernetes-csi/external-snapshotter/client/v8/apis/volumesnapshot/v1"
 	groupsnapv1beta1 "github.com/red-hat-storage/external-snapshotter/client/v8/apis/volumegroupsnapshot/v1beta1"
 	"golang.org/x/time/rate"
@@ -31,6 +32,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	ramen "github.com/ramendr/ramen/api/v1alpha1"
+	"github.com/ramendr/ramen/internal/controller/replication"
 	"github.com/ramendr/ramen/internal/controller/util"
 )
 
@@ -571,15 +573,27 @@ func (r *DRClusterConfigReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 	controller := ctrl.NewControllerManagedBy(mgr)
 
-	return controller.WithOptions(ctrlcontroller.Options{
+	ctrlBuilder := controller.WithOptions(ctrlcontroller.Options{
 		RateLimiter: rateLimiter,
 	}).For(&ramen.DRClusterConfig{}).
 		Watches(&storagev1.StorageClass{}, drccMapFn, drccPredFn).
 		Watches(&snapv1.VolumeSnapshotClass{}, drccMapFn, drccPredFn).
 		Watches(&volrep.VolumeReplicationClass{}, drccMapFn, drccPredFn).
-		Watches(&volrep.VolumeGroupReplicationClass{}, drccMapFn, drccPredFn).
 		Watches(&groupsnapv1beta1.VolumeGroupSnapshotClass{}, drccMapFn, drccPredFn).
 		Watches(&csiaddonsv1alpha1.NetworkFenceClass{}, drccMapFn, drccPredFn).
-		Watches(&csiaddonsv1alpha1.CSIAddonsNode{}, drccMapFn, drccPredFn).
-		Complete(r)
+		Watches(&csiaddonsv1alpha1.CSIAddonsNode{}, drccMapFn, drccPredFn)
+
+	// Add conditional watch for VolumeGroupReplicationClass based on CRD availability
+	ctx := context.Background()
+	crdDetector := replication.NewCRDDetector(mgr.GetClient())
+
+	if crdDetector.IsVolumeGroupReplicationClassAvailable(ctx) {
+		r.Log.Info("VolumeGroupReplicationClass CRD from csi-addons detected")
+		ctrlBuilder = ctrlBuilder.Watches(&volrep.VolumeGroupReplicationClass{}, drccMapFn, drccPredFn)
+	} else {
+		r.Log.Info("VolumeGroupReplicationClass CRD from csi-addons not found, using neutral type")
+		ctrlBuilder = ctrlBuilder.Watches(&neutral.VolumeGroupReplicationClass{}, drccMapFn, drccPredFn)
+	}
+
+	return ctrlBuilder.Complete(r)
 }
