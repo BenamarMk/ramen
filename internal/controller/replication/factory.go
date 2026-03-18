@@ -171,4 +171,23 @@ func (f *ReplicationFactory) GetVolumeGroupReplicationContentType() client.Objec
 	return &neutral.VolumeGroupReplicationContent{}
 }
 
+// GetVolumeGroupReplicationClassListType returns the client.ObjectList type for VolumeGroupReplicationClassList
+func (f *ReplicationFactory) GetVolumeGroupReplicationClassListType() client.ObjectList {
+	if f.IsUsingVolrep() {
+		return &volrep.VolumeGroupReplicationClassList{}
+	}
+	return &neutral.VolumeGroupReplicationClassList{}
+}
+
+// WrapVolumeGroupReplicationClassList wraps an existing VolumeGroupReplicationClassList object
+func (f *ReplicationFactory) WrapVolumeGroupReplicationClassList(obj client.ObjectList) VolumeGroupReplicationClassListInterface {
+	if vgrcl, ok := obj.(*volrep.VolumeGroupReplicationClassList); ok {
+		return &VolrepVolumeGroupReplicationClassList{VolumeGroupReplicationClassList: vgrcl}
+	}
+	if vgrcl, ok := obj.(*neutral.VolumeGroupReplicationClassList); ok {
+		return &NeutralVolumeGroupReplicationClassList{VolumeGroupReplicationClassList: vgrcl}
+	}
+	return nil
+}
+
 // Made with Bob

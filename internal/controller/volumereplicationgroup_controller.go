@@ -975,14 +975,17 @@ func (v *VRGInstance) updateReplicationClassList() error {
 	v.log.Info("Number of Replication Classes", "count", len(v.replClassList.Items))
 
 	if util.IsCGEnabledForVolRep(v.ctx, v.reconciler.APIReader) {
-		v.grpReplClassList = v.replicationFactory.NewVolumeGroupReplicationClassList()
-		if err := v.reconciler.List(v.ctx, v.grpReplClassList, listOptions...); err != nil {
+		// Create the appropriate concrete list type for the Kubernetes client
+		concreteList := v.replicationFactory.GetVolumeGroupReplicationClassListType()
+		if err := v.reconciler.List(v.ctx, concreteList, listOptions...); err != nil {
 			v.log.Error(err, "Failed to list Group Replication Classes",
 				"labeled", labels.Set(labelSelector.MatchLabels))
 
 			return fmt.Errorf("failed to list Group Replication Classes, %w", err)
 		}
 
+		// Wrap the concrete list in our interface
+		v.grpReplClassList = v.replicationFactory.WrapVolumeGroupReplicationClassList(concreteList)
 		v.log.Info("Number of Group Replication Classes", "count", len(v.grpReplClassList.GetItems()))
 	}
 
