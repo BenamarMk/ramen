@@ -1,0 +1,75 @@
+# Example VolumeReplicationGroup with replication API priority annotation
+#
+# This example demonstrates how to use the replication-api-priority annotation
+# to control which replication API the VRG should use.
+
+---
+# Example 1: Force use of neutral API
+apiVersion: ramendr.openshift.io/v1alpha1
+kind: VolumeReplicationGroup
+metadata:
+  name: my-app-vrg-neutral
+  namespace: my-app
+  annotations:
+    # This annotation forces the use of neutral replication API
+    # even if volrep CRDs are available
+    ramendr.openshift.io/replication-api-priority: "neutral"
+spec:
+  pvcSelector:
+    matchLabels:
+      app: my-app
+  replicationState: primary
+  s3Profiles:
+    - s3-profile-1
+  async:
+    schedulingInterval: "5m"
+    replicationClassSelector:
+      matchLabels:
+        ramendr.openshift.io/replicationid: storage-replication-id
+
+---
+# Example 2: Prefer volrep API (if available)
+apiVersion: ramendr.openshift.io/v1alpha1
+kind: VolumeReplicationGroup
+metadata:
+  name: my-app-vrg-volrep
+  namespace: my-app
+  annotations:
+    # This annotation prefers volrep API if CRDs are available
+    # Falls back to neutral if volrep CRDs are not installed
+    ramendr.openshift.io/replication-api-priority: "volrep"
+spec:
+  pvcSelector:
+    matchLabels:
+      app: my-app
+  replicationState: primary
+  s3Profiles:
+    - s3-profile-1
+  async:
+    schedulingInterval: "5m"
+    replicationClassSelector:
+      matchLabels:
+        ramendr.openshift.io/replicationid: storage-replication-id
+
+---
+# Example 3: Auto-detect (default behavior)
+apiVersion: ramendr.openshift.io/v1alpha1
+kind: VolumeReplicationGroup
+metadata:
+  name: my-app-vrg-auto
+  namespace: my-app
+  # No annotation - will auto-detect based on available CRDs
+spec:
+  pvcSelector:
+    matchLabels:
+      app: my-app
+  replicationState: primary
+  s3Profiles:
+    - s3-profile-1
+  async:
+    schedulingInterval: "5m"
+    replicationClassSelector:
+      matchLabels:
+        ramendr.openshift.io/replicationid: storage-replication-id
+
+# Made with Bob

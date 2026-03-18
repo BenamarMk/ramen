@@ -6,24 +6,33 @@ package replication
 import (
 	"context"
 
-	volrep "github.com/csi-addons/kubernetes-csi-addons/api/replication.storage/v1alpha1"
 	neutral "github.com/BenamarMk/replication-storage-io-crds/api/v1alpha1"
+	volrep "github.com/csi-addons/kubernetes-csi-addons/api/replication.storage/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	ramendrv1alpha1 "github.com/ramendr/ramen/api/v1alpha1"
 )
 
 // ReplicationFactory creates replication objects based on CRD availability
 type ReplicationFactory struct {
-	detector *CRDDetector
-	ctx      context.Context
+	detector    *CRDDetector
+	ctx         context.Context
+	annotations map[string]string
 }
 
 // NewReplicationFactory creates a new factory
 func NewReplicationFactory(ctx context.Context, client client.Client) *ReplicationFactory {
 	return &ReplicationFactory{
-		detector: NewCRDDetector(client),
-		ctx:      ctx,
+		detector:    NewCRDDetector(client),
+		ctx:         ctx,
+		annotations: make(map[string]string),
 	}
+}
+
+// SetAnnotations sets the VRG annotations for the factory to use in decision making
+func (f *ReplicationFactory) SetAnnotations(annotations map[string]string) {
+	f.annotations = annotations
 }
 
 // NewVolumeGroupReplication creates a new VolumeGroupReplication object
@@ -137,8 +146,22 @@ func (f *ReplicationFactory) WrapVolumeGroupReplicationContent(obj client.Object
 	return nil
 }
 
-// IsUsingVolrep returns true if volrep CRDs are available
+// IsUsingVolrep returns true if volrep CRDs should be used
+// It checks the annotation first, then falls back to CRD detection
 func (f *ReplicationFactory) IsUsingVolrep() bool {
+	// Check if there's an annotation specifying the priority
+	if priority, ok := f.annotations[ramendrv1alpha1.VRGReplicationAPIPriorityAnnotation]; ok {
+		switch priority {
+		case ramendrv1alpha1.ReplicationAPIPriorityNeutral:
+			// User explicitly wants neutral API
+			return false
+		case ramendrv1alpha1.ReplicationAPIPriorityVolrep:
+			// User explicitly wants volrep API, but only if it's available
+			return f.detector.IsVolumeGroupReplicationAvailable(f.ctx)
+		}
+	}
+
+	// No annotation or invalid value, fall back to CRD detection
 	return f.detector.IsVolumeGroupReplicationAvailable(f.ctx)
 }
 

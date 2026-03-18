@@ -457,13 +457,6 @@ func (r *VolumeReplicationGroupReconciler) Reconcile(ctx context.Context, req ct
 		storageClassCache:    make(map[string]*storagev1.StorageClass),
 	}
 
-	// Log which CRD type is being used
-	if v.replicationFactory.IsUsingVolrep() {
-		log.Info("Using VolumeGroupReplication CRDs from csi-addons (replication.storage.openshift.io)")
-	} else {
-		log.Info("Using VolumeGroupReplication CRDs from neutral implementation (replication.storage.io)")
-	}
-
 	// Fetch the VolumeReplicationGroup instance
 	if err := r.APIReader.Get(ctx, req.NamespacedName, v.instance); err != nil {
 		if k8serrors.IsNotFound(err) {
@@ -476,6 +469,16 @@ func (r *VolumeReplicationGroupReconciler) Reconcile(ctx context.Context, req ct
 
 		return ctrl.Result{}, fmt.Errorf("failed to reconcile VolumeReplicationGroup (%v), %w",
 			req.NamespacedName, err)
+	}
+
+	// Set VRG annotations on the replication factory for API priority decision
+	v.replicationFactory.SetAnnotations(v.instance.GetAnnotations())
+
+	// Log which CRD type is being used
+	if v.replicationFactory.IsUsingVolrep() {
+		log.Info("Using VolumeGroupReplication CRDs from csi-addons (replication.storage.openshift.io)")
+	} else {
+		log.Info("Using VolumeGroupReplication CRDs from neutral implementation (replication.storage.io)")
 	}
 
 	_, ramenConfig, err := ConfigMapGet(ctx, r.APIReader)

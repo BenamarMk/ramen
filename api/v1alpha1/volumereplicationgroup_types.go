@@ -10,6 +10,20 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// Annotation key for prioritizing replication API
+const (
+	// VRGReplicationAPIPriorityAnnotation is used to specify which replication API to prioritize
+	// Valid values: "volrep" (prioritize VolumeReplication API), "neutral" (prioritize neutral API)
+	// If not set or if the prioritized API is not available, falls back to CRD detection
+	VRGReplicationAPIPriorityAnnotation = "ramendr.openshift.io/replication-api-priority"
+)
+
+// Valid values for VRGReplicationAPIPriorityAnnotation
+const (
+	ReplicationAPIPriorityVolrep  = "volrep"
+	ReplicationAPIPriorityNeutral = "neutral"
+)
+
 // ReplicationState represents the replication operations to be performed on the volume
 type ReplicationState string
 

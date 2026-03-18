@@ -34,6 +34,10 @@ to orchestrate volume replication and recovery across clusters.
 [Ceph-csi](https://github.com/ceph/ceph-csi/) is one such plugin that
 implements the csi-addons APIs.
 
+Ramen also supports a [neutral replication API](https://github.com/BenamarMk/replication-storage-io-crds)
+that provides an alternative implementation. You can control which API to use via
+[VRG annotations](docs/replication-api-priority.md).
+
 ### Volsync Based Replication
 
 For storage that supports Kubernetes `Volume[Group]Snapshots` APIs, Ramen uses
