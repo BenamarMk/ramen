@@ -9,10 +9,8 @@ toolchain go1.24.5
 // This replace should always be here for ease of development.
 replace github.com/ramendr/ramen/api => ./api
 
-// Local development replace for replication-storage-io-crds
-replace github.com/ramendr/replication-storage-io-crds/api => ../replication-storage-io-crds/api
-
 require (
+	github.com/BenamarMk/replication-storage-io-crds/api v0.1.0
 	github.com/aws/aws-sdk-go v1.55.5
 	github.com/backube/volsync v0.11.0
 	github.com/csi-addons/kubernetes-csi-addons v0.10.1-0.20250723164929-7735388cf184
@@ -25,7 +23,6 @@ require (
 	github.com/prometheus/client_golang v1.22.0
 	github.com/ramendr/ramen/api v0.0.0-20240924121439-b7cba82de417
 	github.com/ramendr/recipe v0.0.0-20250917131341-9ede78ec0623
-	github.com/ramendr/replication-storage-io-crds/api v0.0.0-00010101000000-000000000000
 	github.com/red-hat-storage/external-snapshotter/client/v8 v8.2.1-0.20250602100552-7549f3bd7096
 	github.com/stolostron/multicloud-operators-placementrule v1.2.4-1-20220311-8eedb3f.0.20230828200208-cd3c119a7fa0
 	github.com/stretchr/testify v1.11.1

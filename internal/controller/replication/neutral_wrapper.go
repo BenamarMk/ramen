@@ -4,7 +4,7 @@
 package replication
 
 import (
-	neutral "github.com/ramendr/replication-storage-io-crds/api/v1alpha1"
+	neutral "github.com/BenamarMk/replication-storage-io-crds/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )

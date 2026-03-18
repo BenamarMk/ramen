@@ -9,7 +9,7 @@ import (
 
 	volrep "github.com/csi-addons/kubernetes-csi-addons/api/replication.storage/v1alpha1"
 	"github.com/ramendr/ramen/internal/controller/replication"
-	neutral "github.com/ramendr/replication-storage-io-crds/api/v1alpha1"
+	neutral "github.com/BenamarMk/replication-storage-io-crds/api/v1alpha1"
 	"github.com/stretchr/testify/assert"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
