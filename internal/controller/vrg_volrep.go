@@ -17,6 +17,7 @@ import (
 	storagev1 "k8s.io/api/storage/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	virtv1 "kubevirt.io/api/core/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -1406,7 +1407,7 @@ func (v *VRGInstance) selectVolumeReplicationClass(
 		return nil, err
 	}
 
-	if len(v.replClassList.Items) == 0 && len(v.grpReplClassList.Items) == 0 {
+	if len(v.replClassList.Items) == 0 && len(v.grpReplClassList.Items) == 0 && len(v.neutralGrpReplClassList.Items) == 0 {
 		v.log.Info("No VolumeReplicationClass and VolumeGroupReplicationClass available")
 
 		return nil, fmt.Errorf("no VolumeReplicationClass and VolumeGroupReplicationClass available")
@@ -1478,12 +1479,40 @@ func (v *VRGInstance) selectVolumeReplicationClass(
 				replicationClass.Spec.Provisioner, ReplicationIDLabel)
 		}
 	} else {
+		objType = "VolumeGroupReplicationClass"
+		
+		// Process legacy API VolumeGroupReplicationClasses
 		for index := range v.grpReplClassList.Items {
-			objType = "VolumeGroupReplicationClass"
 			replicationClass := &v.grpReplClassList.Items[index]
 
 			filterMatchingReplicationClass(replicationClass, replicationClass.Spec.Parameters,
 				replicationClass.Spec.Provisioner, GroupReplicationIDLabel)
+		}
+		
+		// Process neutral API VolumeGroupReplicationClasses
+		for index := range v.neutralGrpReplClassList.Items {
+			neutralClass := &v.neutralGrpReplClassList.Items[index]
+			
+			// Extract spec fields from unstructured
+			spec, found, err := unstructured.NestedMap(neutralClass.Object, "spec")
+			if !found || err != nil {
+				v.log.Info("Skipping neutral VGRClass - no spec found", "name", neutralClass.GetName())
+				continue
+			}
+			
+			provisioner, found, err := unstructured.NestedString(spec, "provisioner")
+			if !found || err != nil {
+				v.log.Info("Skipping neutral VGRClass - no provisioner found", "name", neutralClass.GetName())
+				continue
+			}
+			
+			parameters, found, err := unstructured.NestedStringMap(spec, "parameters")
+			if !found || err != nil {
+				v.log.Info("Skipping neutral VGRClass - no parameters found", "name", neutralClass.GetName())
+				continue
+			}
+			
+			filterMatchingReplicationClass(neutralClass, parameters, provisioner, GroupReplicationIDLabel)
 		}
 	}
 

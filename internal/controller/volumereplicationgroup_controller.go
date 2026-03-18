@@ -24,6 +24,7 @@ import (
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -426,14 +427,20 @@ func (r *VolumeReplicationGroupReconciler) Reconcile(ctx context.Context, req ct
 	defer log.Info("Exiting reconcile loop")
 
 	v := VRGInstance{
-		reconciler:        r,
-		ctx:               ctx,
-		log:               log,
-		instance:          &ramendrv1alpha1.VolumeReplicationGroup{},
-		volRepPVCs:        []corev1.PersistentVolumeClaim{},
-		volSyncPVCs:       []corev1.PersistentVolumeClaim{},
-		replClassList:     &volrep.VolumeReplicationClassList{},
-		grpReplClassList:  &volrep.VolumeGroupReplicationClassList{},
+		reconciler:       r,
+		ctx:              ctx,
+		log:              log,
+		instance:         &ramendrv1alpha1.VolumeReplicationGroup{},
+		volRepPVCs:       []corev1.PersistentVolumeClaim{},
+		volSyncPVCs:      []corev1.PersistentVolumeClaim{},
+		replClassList:    &volrep.VolumeReplicationClassList{},
+		grpReplClassList: &volrep.VolumeGroupReplicationClassList{},
+		neutralGrpReplClassList: &unstructured.UnstructuredList{
+			Object: map[string]interface{}{
+				"apiVersion": "replication.storage.io/v1alpha1",
+				"kind":       "VolumeGroupReplicationClassList",
+			},
+		},
 		namespacedName:    req.NamespacedName.String(),
 		objectStorers:     make(map[string]cachedObjectStorer),
 		storageClassCache: make(map[string]*storagev1.StorageClass),
@@ -509,26 +516,27 @@ type cachedObjectStorer struct {
 }
 
 type VRGInstance struct {
-	reconciler           *VolumeReplicationGroupReconciler
-	ctx                  context.Context
-	log                  logr.Logger
-	instance             *ramendrv1alpha1.VolumeReplicationGroup
-	savedInstanceStatus  ramendrv1alpha1.VolumeReplicationGroupStatus
-	ramenConfig          *ramendrv1alpha1.RamenConfig
-	recipeElements       util.RecipeElements
-	volRepPVCs           []corev1.PersistentVolumeClaim
-	volSyncPVCs          []corev1.PersistentVolumeClaim
-	replClassList        *volrep.VolumeReplicationClassList
-	grpReplClassList     *volrep.VolumeGroupReplicationClassList
-	storageClassCache    map[string]*storagev1.StorageClass
-	vrgObjectProtected   *metav1.Condition
-	kubeObjectsProtected *metav1.Condition
-	vrcUpdated           bool
-	namespacedName       string
-	volSyncHandler       *volsync.VSHandler
-	objectStorers        map[string]cachedObjectStorer
-	s3StoreAccessors     []s3StoreAccessor
-	result               ctrl.Result
+	reconciler              *VolumeReplicationGroupReconciler
+	ctx                     context.Context
+	log                     logr.Logger
+	instance                *ramendrv1alpha1.VolumeReplicationGroup
+	savedInstanceStatus     ramendrv1alpha1.VolumeReplicationGroupStatus
+	ramenConfig             *ramendrv1alpha1.RamenConfig
+	recipeElements          util.RecipeElements
+	volRepPVCs              []corev1.PersistentVolumeClaim
+	volSyncPVCs             []corev1.PersistentVolumeClaim
+	replClassList           *volrep.VolumeReplicationClassList
+	grpReplClassList        *volrep.VolumeGroupReplicationClassList
+	neutralGrpReplClassList *unstructured.UnstructuredList // For neutral API (replication.storage.io)
+	storageClassCache       map[string]*storagev1.StorageClass
+	vrgObjectProtected      *metav1.Condition
+	kubeObjectsProtected    *metav1.Condition
+	vrcUpdated              bool
+	namespacedName          string
+	volSyncHandler          *volsync.VSHandler
+	objectStorers           map[string]cachedObjectStorer
+	s3StoreAccessors        []s3StoreAccessor
+	result                  ctrl.Result
 	// replicationHandler provides abstraction for volume group replication operations
 	// Supports both legacy (replication.storage.openshift.io) and neutral (replication.storage.io) APIs
 	replicationHandler replication.ReplicationHandler
@@ -971,14 +979,24 @@ func (v *VRGInstance) updateReplicationClassList() error {
 	v.log.Info("Number of Replication Classes", "count", len(v.replClassList.Items))
 
 	if util.IsCGEnabledForVolRep(v.ctx, v.reconciler.APIReader) {
+		// List legacy API VolumeGroupReplicationClasses
 		if err := v.reconciler.List(v.ctx, v.grpReplClassList, listOptions...); err != nil {
-			v.log.Error(err, "Failed to list Group Replication Classes",
+			v.log.Error(err, "Failed to list Group Replication Classes (legacy API)",
 				"labeled", labels.Set(labelSelector.MatchLabels))
 
-			return fmt.Errorf("failed to list Group Replication Classes, %w", err)
+			return fmt.Errorf("failed to list Group Replication Classes (legacy API), %w", err)
 		}
 
-		v.log.Info("Number of Group Replication Classes", "count", len(v.grpReplClassList.Items))
+		v.log.Info("Number of Group Replication Classes (legacy API)", "count", len(v.grpReplClassList.Items))
+
+		// List neutral API VolumeGroupReplicationClasses
+		if err := v.reconciler.List(v.ctx, v.neutralGrpReplClassList, listOptions...); err != nil {
+			v.log.Info("Failed to list Group Replication Classes (neutral API) - may not be installed",
+				"labeled", labels.Set(labelSelector.MatchLabels), "error", err)
+			// Don't return error - neutral API may not be installed yet
+		} else {
+			v.log.Info("Number of Group Replication Classes (neutral API)", "count", len(v.neutralGrpReplClassList.Items))
+		}
 	}
 
 	v.vrcUpdated = true
@@ -1182,11 +1200,28 @@ func (v *VRGInstance) findReplicationClassUsingPeerClass(
 	}
 
 	if peerClass.Grouping {
+		// Check legacy API VolumeGroupReplicationClasses
 		for index := range v.grpReplClassList.Items {
 			replicationClass := &v.grpReplClassList.Items[index]
 
 			provisioner := replicationClass.Spec.Provisioner
 			if result := findMatchingReplicationClass(replicationClass, provisioner); result != nil {
+				return result
+			}
+		}
+		
+		// Check neutral API VolumeGroupReplicationClasses
+		for index := range v.neutralGrpReplClassList.Items {
+			neutralClass := &v.neutralGrpReplClassList.Items[index]
+			
+			// Extract provisioner from unstructured
+			provisioner, found, err := unstructured.NestedString(neutralClass.Object, "spec", "provisioner")
+			if !found || err != nil {
+				v.log.Info("Skipping neutral VGRClass - no provisioner", "name", neutralClass.GetName())
+				continue
+			}
+			
+			if result := findMatchingReplicationClass(neutralClass, provisioner); result != nil {
 				return result
 			}
 		}
