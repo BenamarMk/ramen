@@ -64,6 +64,21 @@ func (d *CRDDetector) IsVolumeGroupReplicationContentAvailable(ctx context.Conte
 	return d.IsCRDAvailable(ctx, "volumegroupreplicationcontents.replication.storage.openshift.io")
 }
 
+// IsNeutralVolumeGroupReplicationAvailable checks if VolumeGroupReplication CRD from replication.storage.io is available
+func (d *CRDDetector) IsNeutralVolumeGroupReplicationAvailable(ctx context.Context) bool {
+	return d.IsCRDAvailable(ctx, "volumegroupreplications.replication.storage.io")
+}
+
+// IsNeutralVolumeGroupReplicationClassAvailable checks if VolumeGroupReplicationClass CRD from replication.storage.io is available
+func (d *CRDDetector) IsNeutralVolumeGroupReplicationClassAvailable(ctx context.Context) bool {
+	return d.IsCRDAvailable(ctx, "volumegroupreplicationclasses.replication.storage.io")
+}
+
+// IsNeutralVolumeGroupReplicationContentAvailable checks if VolumeGroupReplicationContent CRD from replication.storage.io is available
+func (d *CRDDetector) IsNeutralVolumeGroupReplicationContentAvailable(ctx context.Context) bool {
+	return d.IsCRDAvailable(ctx, "volumegroupreplicationcontents.replication.storage.io")
+}
+
 // ClearCache clears the CRD availability cache
 func (d *CRDDetector) ClearCache() {
 	d.mu.Lock()

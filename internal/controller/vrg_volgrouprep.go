@@ -29,6 +29,12 @@ const (
 //nolint:gocognit,cyclop,funlen
 func (v *VRGInstance) reconcileVolGroupRepsAsPrimary(groupPVCs map[types.NamespacedName][]*corev1.PersistentVolumeClaim,
 ) {
+	// Check if VolumeGroupReplication CRDs are available
+	if !v.replicationFactory.IsUsingVolrep() && !v.replicationFactory.IsUsingNeutral() {
+		v.log.Info("No VolumeGroupReplication CRDs available, skipping VGR reconciliation as primary")
+		return
+	}
+
 	for vgrNamespacedName, pvcs := range groupPVCs {
 		log := v.log.WithValues("vgr", vgrNamespacedName.String())
 
@@ -70,6 +76,12 @@ func (v *VRGInstance) reconcileVolGroupRepsAsPrimary(groupPVCs map[types.Namespa
 func (v *VRGInstance) reconcileVolGroupRepsAsSecondary(requeue *bool,
 	groupPVCs map[types.NamespacedName][]*corev1.PersistentVolumeClaim,
 ) {
+	// Check if VolumeGroupReplication CRDs are available
+	if !v.replicationFactory.IsUsingVolrep() && !v.replicationFactory.IsUsingNeutral() {
+		v.log.Info("No VolumeGroupReplication CRDs available, skipping VGR reconciliation as secondary")
+		return
+	}
+
 	for vgrNamespacedName, pvcs := range groupPVCs {
 		log := v.log.WithValues("vgr", vgrNamespacedName.String())
 
@@ -873,6 +885,12 @@ func (v *VRGInstance) addArchivedAnnotationForVGRandVGRC(vgr *volrep.VolumeGroup
 }
 
 func (v *VRGInstance) restoreVGRsAndVGRCsForVolRep(result *ctrl.Result) error {
+	// Check if VolumeGroupReplication CRDs are available
+	if !v.replicationFactory.IsUsingVolrep() && !v.replicationFactory.IsUsingNeutral() {
+		v.log.Info("No VolumeGroupReplication CRDs available, skipping VGR restore")
+		return nil
+	}
+
 	if !rmnutil.IsCGEnabledForVolRep(v.ctx, v.reconciler.APIReader) {
 		return nil
 	}
