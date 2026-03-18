@@ -191,6 +191,28 @@ func (s *NeutralVolumeGroupReplicationClassSpec) GetParameters() map[string]stri
 	return s.Spec.Parameters
 }
 
+// NeutralVolumeGroupReplicationClassList wraps neutral.VolumeGroupReplicationClassList
+type NeutralVolumeGroupReplicationClassList struct {
+	*neutral.VolumeGroupReplicationClassList
+}
+
+func (v *NeutralVolumeGroupReplicationClassList) GetItems() []VolumeGroupReplicationClassInterface {
+	items := make([]VolumeGroupReplicationClassInterface, len(v.VolumeGroupReplicationClassList.Items))
+	for i := range v.VolumeGroupReplicationClassList.Items {
+		items[i] = &NeutralVolumeGroupReplicationClass{VolumeGroupReplicationClass: &v.VolumeGroupReplicationClassList.Items[i]}
+	}
+	return items
+}
+
+func (v *NeutralVolumeGroupReplicationClassList) SetItems(items []VolumeGroupReplicationClassInterface) {
+	v.VolumeGroupReplicationClassList.Items = make([]neutral.VolumeGroupReplicationClass, len(items))
+	for i, item := range items {
+		if vgrc, ok := item.(*NeutralVolumeGroupReplicationClass); ok {
+			v.VolumeGroupReplicationClassList.Items[i] = *vgrc.VolumeGroupReplicationClass
+		}
+	}
+}
+
 // NeutralVolumeGroupReplicationContent wraps neutral.VolumeGroupReplicationContent
 type NeutralVolumeGroupReplicationContent struct {
 	*neutral.VolumeGroupReplicationContent

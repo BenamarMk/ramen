@@ -450,9 +450,8 @@ func (r *VolumeReplicationGroupReconciler) Reconcile(ctx context.Context, req ct
 		instance:             &ramendrv1alpha1.VolumeReplicationGroup{},
 		volRepPVCs:           []corev1.PersistentVolumeClaim{},
 		volSyncPVCs:          []corev1.PersistentVolumeClaim{},
-		replClassList:        &volrep.VolumeReplicationClassList{},
-		grpReplClassList:     &volrep.VolumeGroupReplicationClassList{},
-		replicationFactory:   replication.NewReplicationFactory(ctx, r.Client),
+		replClassList:      &volrep.VolumeReplicationClassList{},
+		replicationFactory: replication.NewReplicationFactory(ctx, r.Client),
 		namespacedName:       req.NamespacedName.String(),
 		objectStorers:        make(map[string]cachedObjectStorer),
 		storageClassCache:    make(map[string]*storagev1.StorageClass),
@@ -530,7 +529,7 @@ type VRGInstance struct {
 	volRepPVCs           []corev1.PersistentVolumeClaim
 	volSyncPVCs          []corev1.PersistentVolumeClaim
 	replClassList        *volrep.VolumeReplicationClassList
-	grpReplClassList     *volrep.VolumeGroupReplicationClassList
+	grpReplClassList     replication.VolumeGroupReplicationClassListInterface
 	replicationFactory   *replication.ReplicationFactory
 	storageClassCache    map[string]*storagev1.StorageClass
 	vrgObjectProtected   *metav1.Condition
@@ -976,6 +975,7 @@ func (v *VRGInstance) updateReplicationClassList() error {
 	v.log.Info("Number of Replication Classes", "count", len(v.replClassList.Items))
 
 	if util.IsCGEnabledForVolRep(v.ctx, v.reconciler.APIReader) {
+		v.grpReplClassList = v.replicationFactory.NewVolumeGroupReplicationClassList()
 		if err := v.reconciler.List(v.ctx, v.grpReplClassList, listOptions...); err != nil {
 			v.log.Error(err, "Failed to list Group Replication Classes",
 				"labeled", labels.Set(labelSelector.MatchLabels))
@@ -983,7 +983,7 @@ func (v *VRGInstance) updateReplicationClassList() error {
 			return fmt.Errorf("failed to list Group Replication Classes, %w", err)
 		}
 
-		v.log.Info("Number of Group Replication Classes", "count", len(v.grpReplClassList.Items))
+		v.log.Info("Number of Group Replication Classes", "count", len(v.grpReplClassList.GetItems()))
 	}
 
 	v.vrcUpdated = true
@@ -1187,10 +1187,10 @@ func (v *VRGInstance) findReplicationClassUsingPeerClass(
 	}
 
 	if peerClass.Grouping {
-		for index := range v.grpReplClassList.Items {
-			replicationClass := &v.grpReplClassList.Items[index]
+		for _, item := range v.grpReplClassList.GetItems() {
+			replicationClass := item
 
-			provisioner := replicationClass.Spec.Provisioner
+			provisioner := replicationClass.GetSpec().GetProvisioner()
 			if result := findMatchingReplicationClass(replicationClass, provisioner); result != nil {
 				return result
 			}

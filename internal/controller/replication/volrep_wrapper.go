@@ -193,6 +193,28 @@ func (s *VolrepVolumeGroupReplicationClassSpec) GetParameters() map[string]strin
 	return s.Spec.Parameters
 }
 
+// VolrepVolumeGroupReplicationClassList wraps volrep.VolumeGroupReplicationClassList
+type VolrepVolumeGroupReplicationClassList struct {
+	*volrep.VolumeGroupReplicationClassList
+}
+
+func (v *VolrepVolumeGroupReplicationClassList) GetItems() []VolumeGroupReplicationClassInterface {
+	items := make([]VolumeGroupReplicationClassInterface, len(v.VolumeGroupReplicationClassList.Items))
+	for i := range v.VolumeGroupReplicationClassList.Items {
+		items[i] = &VolrepVolumeGroupReplicationClass{VolumeGroupReplicationClass: &v.VolumeGroupReplicationClassList.Items[i]}
+	}
+	return items
+}
+
+func (v *VolrepVolumeGroupReplicationClassList) SetItems(items []VolumeGroupReplicationClassInterface) {
+	v.VolumeGroupReplicationClassList.Items = make([]volrep.VolumeGroupReplicationClass, len(items))
+	for i, item := range items {
+		if vgrc, ok := item.(*VolrepVolumeGroupReplicationClass); ok {
+			v.VolumeGroupReplicationClassList.Items[i] = *vgrc.VolumeGroupReplicationClass
+		}
+	}
+}
+
 // VolrepVolumeGroupReplicationContent wraps volrep.VolumeGroupReplicationContent
 type VolrepVolumeGroupReplicationContent struct {
 	*volrep.VolumeGroupReplicationContent

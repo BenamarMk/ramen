@@ -96,6 +96,13 @@ type VolumeGroupReplicationClassSpecInterface interface {
 	GetParameters() map[string]string
 }
 
+// VolumeGroupReplicationClassListInterface defines the common interface for VolumeGroupReplicationClass list objects
+type VolumeGroupReplicationClassListInterface interface {
+	client.ObjectList
+	GetItems() []VolumeGroupReplicationClassInterface
+	SetItems([]VolumeGroupReplicationClassInterface)
+}
+
 // VolumeGroupReplicationContentInterface defines the common interface for VolumeGroupReplicationContent objects
 type VolumeGroupReplicationContentInterface interface {
 	client.Object

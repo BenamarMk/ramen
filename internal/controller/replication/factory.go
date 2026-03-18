@@ -70,6 +70,19 @@ func (f *ReplicationFactory) NewVolumeGroupReplicationClass(name string) VolumeG
 	}
 }
 
+// NewVolumeGroupReplicationClassList creates a new VolumeGroupReplicationClassList object
+func (f *ReplicationFactory) NewVolumeGroupReplicationClassList() VolumeGroupReplicationClassListInterface {
+	if f.detector.IsVolumeGroupReplicationClassAvailable(f.ctx) {
+		return &VolrepVolumeGroupReplicationClassList{
+			VolumeGroupReplicationClassList: &volrep.VolumeGroupReplicationClassList{},
+		}
+	}
+
+	return &NeutralVolumeGroupReplicationClassList{
+		VolumeGroupReplicationClassList: &neutral.VolumeGroupReplicationClassList{},
+	}
+}
+
 // NewVolumeGroupReplicationContent creates a new VolumeGroupReplicationContent object
 func (f *ReplicationFactory) NewVolumeGroupReplicationContent(name string) VolumeGroupReplicationContentInterface {
 	if f.detector.IsVolumeGroupReplicationContentAvailable(f.ctx) {

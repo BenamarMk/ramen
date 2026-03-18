@@ -1406,7 +1406,12 @@ func (v *VRGInstance) selectVolumeReplicationClass(
 		return nil, err
 	}
 
-	if len(v.replClassList.Items) == 0 && len(v.grpReplClassList.Items) == 0 {
+	grpReplClassCount := 0
+	if v.grpReplClassList != nil {
+		grpReplClassCount = len(v.grpReplClassList.GetItems())
+	}
+
+	if len(v.replClassList.Items) == 0 && grpReplClassCount == 0 {
 		v.log.Info("No VolumeReplicationClass and VolumeGroupReplicationClass available")
 
 		return nil, fmt.Errorf("no VolumeReplicationClass and VolumeGroupReplicationClass available")
@@ -1478,12 +1483,12 @@ func (v *VRGInstance) selectVolumeReplicationClass(
 				replicationClass.Spec.Provisioner, ReplicationIDLabel)
 		}
 	} else {
-		for index := range v.grpReplClassList.Items {
+		for _, item := range v.grpReplClassList.GetItems() {
 			objType = "VolumeGroupReplicationClass"
-			replicationClass := &v.grpReplClassList.Items[index]
+			replicationClass := item
 
-			filterMatchingReplicationClass(replicationClass, replicationClass.Spec.Parameters,
-				replicationClass.Spec.Provisioner, GroupReplicationIDLabel)
+			filterMatchingReplicationClass(replicationClass, replicationClass.GetSpec().GetParameters(),
+				replicationClass.GetSpec().GetProvisioner(), GroupReplicationIDLabel)
 		}
 	}
 
