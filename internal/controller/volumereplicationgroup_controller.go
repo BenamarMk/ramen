@@ -426,13 +426,17 @@ func (r *VolumeReplicationGroupReconciler) Reconcile(ctx context.Context, req ct
 	defer log.Info("Exiting reconcile loop")
 
 	v := VRGInstance{
-		reconciler:        r,
-		ctx:               ctx,
-		log:               log,
-		instance:          &ramendrv1alpha1.VolumeReplicationGroup{},
-		volRepPVCs:        []corev1.PersistentVolumeClaim{},
-		volSyncPVCs:       []corev1.PersistentVolumeClaim{},
-		replClassList:     &volrep.VolumeReplicationClassList{},
+		reconciler:   r,
+		ctx:          ctx,
+		log:          log,
+		instance:     &ramendrv1alpha1.VolumeReplicationGroup{},
+		volRepPVCs:   []corev1.PersistentVolumeClaim{},
+		volSyncPVCs:  []corev1.PersistentVolumeClaim{},
+		replClassList: &volrep.VolumeReplicationClassList{},
+		// Note: grpReplClassList uses legacy type for local cluster operations.
+		// Cross-cluster VGRClass discovery (via ManagedClusterView) supports both
+		// neutral and legacy APIs through GetVGRClassFromManagedCluster.
+		// TODO (Phase 2): Migrate to replicationHandler.DiscoverVGRClasses for full API agnosticism
 		grpReplClassList:  &volrep.VolumeGroupReplicationClassList{},
 		namespacedName:    req.NamespacedName.String(),
 		objectStorers:     make(map[string]cachedObjectStorer),
@@ -509,16 +513,22 @@ type cachedObjectStorer struct {
 }
 
 type VRGInstance struct {
-	reconciler           *VolumeReplicationGroupReconciler
-	ctx                  context.Context
-	log                  logr.Logger
-	instance             *ramendrv1alpha1.VolumeReplicationGroup
-	savedInstanceStatus  ramendrv1alpha1.VolumeReplicationGroupStatus
-	ramenConfig          *ramendrv1alpha1.RamenConfig
-	recipeElements       util.RecipeElements
-	volRepPVCs           []corev1.PersistentVolumeClaim
-	volSyncPVCs          []corev1.PersistentVolumeClaim
-	replClassList        *volrep.VolumeReplicationClassList
+	reconciler          *VolumeReplicationGroupReconciler
+	ctx                 context.Context
+	log                 logr.Logger
+	instance            *ramendrv1alpha1.VolumeReplicationGroup
+	savedInstanceStatus ramendrv1alpha1.VolumeReplicationGroupStatus
+	ramenConfig         *ramendrv1alpha1.RamenConfig
+	recipeElements      util.RecipeElements
+	volRepPVCs          []corev1.PersistentVolumeClaim
+	volSyncPVCs         []corev1.PersistentVolumeClaim
+	replClassList       *volrep.VolumeReplicationClassList
+	// grpReplClassList uses legacy type for LOCAL cluster VGRClass listing.
+	// This is acceptable because:
+	// 1. Local cluster API is controlled by the operator installation
+	// 2. Cross-cluster discovery (via MCV) already supports both APIs in GetVGRClassFromManagedCluster
+	// 3. The replicationHandler provides API abstraction for VGR operations
+	// TODO (Phase 2): Migrate to replicationHandler.DiscoverVGRClasses() for full API-agnostic listing
 	grpReplClassList     *volrep.VolumeGroupReplicationClassList
 	storageClassCache    map[string]*storagev1.StorageClass
 	vrgObjectProtected   *metav1.Condition
