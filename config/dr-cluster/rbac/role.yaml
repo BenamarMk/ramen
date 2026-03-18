@@ -227,6 +227,27 @@ rules:
   - update
   - watch
 - apiGroups:
+  - replication.storage.io
+  resources:
+  - volumegroupreplicationclasses
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - replication.storage.io
+  resources:
+  - volumegroupreplications
+  - volumegroupreplicationcontents
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
   - snapshot.storage.k8s.io
   resources:
   - volumesnapshotclasses
