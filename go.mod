@@ -10,7 +10,7 @@ toolchain go1.24.5
 replace github.com/ramendr/ramen/api => ./api
 
 // Local development replace for replication-storage-io-crds
-replace github.com/ramendr/replication-storage-io-crds/api => /Users/benamar/projects/github/replication-storage-io-crds/api
+replace github.com/ramendr/replication-storage-io-crds/api => ../replication-storage-io-crds/api
 
 require (
 	github.com/aws/aws-sdk-go v1.55.5
