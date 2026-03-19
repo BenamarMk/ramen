@@ -354,11 +354,37 @@ func (m ManagedClusterViewGetterImpl) ListVGSClassMCVs(cluster string) (*viewv1b
 	return m.listMCVsWithLabel(cluster, map[string]string{VGSClassLabel: ""})
 }
 
+// isNoMatchError checks if the error message indicates a "no match" error
+// This typically occurs when a CRD is not installed on the cluster
+func isNoMatchError(err error) bool {
+	if err == nil {
+		return false
+	}
+	
+	errMsg := err.Error()
+	return strings.Contains(errMsg, "no matches for kind") ||
+		strings.Contains(errMsg, "no match") ||
+		strings.Contains(errMsg, "the server could not find the requested resource")
+}
+
+// GetVGRClassFromManagedCluster retrieves a VolumeGroupReplicationClass from a managed cluster.
+// This implementation supports both neutral (replication.storage.io) and legacy
+// (replication.storage.openshift.io) APIs with automatic fallback.
+//
+// Priority order:
+// 1. Try neutral API (replication.storage.io) first
+// 2. Fall back to legacy API (replication.storage.openshift.io) if neutral not found
+//
+// This enables smooth transition from legacy to neutral API without breaking existing deployments.
 func (m ManagedClusterViewGetterImpl) GetVGRClassFromManagedCluster(resourceName, managedCluster string,
 	annotations map[string]string,
 ) (*volrep.VolumeGroupReplicationClass, error) {
 	vgrc := &volrep.VolumeGroupReplicationClass{}
 
+	// Try neutral API first (replication.storage.io)
+	neutralAPIGroup := "replication.storage.io"
+	neutralAPIVersion := "v1alpha1"
+	
 	err := m.getResourceFromManagedCluster(
 		resourceName,
 		"",
@@ -367,12 +393,44 @@ func (m ManagedClusterViewGetterImpl) GetVGRClassFromManagedCluster(resourceName
 		map[string]string{VGRClassLabel: ""},
 		BuildManagedClusterViewName(resourceName, "", MWTypeVGRClass),
 		"VolumeGroupReplicationClass",
-		volrep.GroupVersion.Group,
-		volrep.GroupVersion.Version,
+		neutralAPIGroup,
+		neutralAPIVersion,
 		vgrc,
 	)
 
-	return vgrc, err
+	// If neutral API succeeds, return the result
+	if err == nil {
+		return vgrc, nil
+	}
+
+	// If neutral API fails with "not found" or "no match", try legacy API
+	// This handles cases where neutral CRD is not installed
+	if k8serrors.IsNotFound(err) || isNoMatchError(err) {
+		// Fall back to legacy API (replication.storage.openshift.io)
+		legacyVgrc := &volrep.VolumeGroupReplicationClass{}
+		legacyErr := m.getResourceFromManagedCluster(
+			resourceName,
+			"",
+			managedCluster,
+			annotations,
+			map[string]string{VGRClassLabel: ""},
+			BuildManagedClusterViewName(resourceName, "", MWTypeVGRClass),
+			"VolumeGroupReplicationClass",
+			volrep.GroupVersion.Group, // Legacy API group
+			volrep.GroupVersion.Version,
+			legacyVgrc,
+		)
+		
+		if legacyErr == nil {
+			return legacyVgrc, nil
+		}
+		
+		// If both fail, return the legacy error (more informative)
+		return nil, legacyErr
+	}
+
+	// For other errors (network, permissions, etc.), return immediately
+	return nil, err
 }
 
 func (m ManagedClusterViewGetterImpl) ListVGRClassMCVs(cluster string) (*viewv1beta1.ManagedClusterViewList, error) {
