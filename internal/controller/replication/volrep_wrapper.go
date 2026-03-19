@@ -68,8 +68,16 @@ func (s *VolrepVolumeGroupReplicationSpec) GetReplicationHandle() string {
 	return ""
 }
 
+func (s *VolrepVolumeGroupReplicationSpec) GetExternal() bool {
+	return s.Spec.External
+}
+
 func (s *VolrepVolumeGroupReplicationSpec) SetReplicationState(state ReplicationState) {
 	s.Spec.ReplicationState = volrep.ReplicationState(state)
+}
+
+func (s *VolrepVolumeGroupReplicationSpec) SetExternal(external bool) {
+	s.Spec.External = external
 }
 
 func (s *VolrepVolumeGroupReplicationSpec) SetVolumeGroupReplicationClassName(name string) {

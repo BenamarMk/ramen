@@ -51,11 +51,13 @@ type VolumeGroupReplicationSpecInterface interface {
 	GetSource() VolumeGroupReplicationSourceInterface
 	GetAutoResync() bool
 	GetReplicationHandle() string
+	GetExternal() bool
 	SetReplicationState(ReplicationState)
 	SetVolumeGroupReplicationClassName(string)
 	SetVolumeGroupReplicationContentName(string)
 	SetAutoResync(bool)
 	SetReplicationHandle(string)
+	SetExternal(bool)
 }
 
 // VolumeGroupReplicationSourceInterface defines the common interface for VolumeGroupReplication source

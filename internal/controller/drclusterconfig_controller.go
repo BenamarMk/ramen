@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"reflect"
 	"slices"
+	"strings"
 	"time"
 
 	csiaddonsv1alpha1 "github.com/csi-addons/kubernetes-csi-addons/api/csiaddons/v1alpha1"
@@ -433,8 +434,15 @@ func (r *DRClusterConfigReconciler) listDRSupportedVGRCs(ctx context.Context) ([
 	// Note: We check for neutral CRDs by attempting to list them
 	// If the CRDs don't exist, the List will fail and we skip
 	neutralClasses := &neutral.VolumeGroupReplicationClassList{}
-	if err := r.Client.List(ctx, neutralClasses); err == nil {
-		// Neutral CRDs exist, add their classes
+	if err := r.Client.List(ctx, neutralClasses); err != nil {
+		// Check if error is due to type not being registered in scheme
+		if !strings.Contains(err.Error(), "no kind is registered for the type") {
+			// Real error, not just missing CRDs
+			r.Log.Info("Failed to list neutral VolumeGroupReplicationClasses", "error", err.Error())
+		}
+		// If it's a scheme error or CRDs don't exist, just skip - not a fatal error
+	} else {
+		// Neutral CRDs exist and list succeeded, add their classes
 		for i := range neutralClasses.Items {
 			if !util.HasLabel(&neutralClasses.Items[i], GroupReplicationIDLabel) {
 				continue
@@ -443,7 +451,6 @@ func (r *DRClusterConfigReconciler) listDRSupportedVGRCs(ctx context.Context) ([
 			vgrcs = append(vgrcs, neutralClasses.Items[i].Name)
 		}
 	}
-	// If neutral List fails, it just means those CRDs aren't installed - not an error
 
 	return vgrcs, nil
 }
@@ -620,3 +627,4 @@ func (r *DRClusterConfigReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 	return ctrlBuilder.Complete(r)
 }
+

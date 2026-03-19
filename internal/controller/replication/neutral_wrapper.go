@@ -67,8 +67,17 @@ func (s *NeutralVolumeGroupReplicationSpec) GetReplicationHandle() string {
 	return s.Spec.ReplicationHandle
 }
 
+func (s *NeutralVolumeGroupReplicationSpec) GetExternal() bool {
+	// neutral API doesn't have External field, return false
+	return false
+}
+
 func (s *NeutralVolumeGroupReplicationSpec) SetReplicationState(state ReplicationState) {
 	s.Spec.ReplicationState = neutral.ReplicationState(state)
+}
+
+func (s *NeutralVolumeGroupReplicationSpec) SetExternal(external bool) {
+	// neutral API doesn't have External field, no-op
 }
 
 func (s *NeutralVolumeGroupReplicationSpec) SetVolumeGroupReplicationClassName(name string) {
