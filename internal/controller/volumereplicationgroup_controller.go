@@ -981,15 +981,24 @@ func (v *VRGInstance) updateReplicationClassList() error {
 		// Create the appropriate concrete list type for the Kubernetes client
 		concreteList := v.replicationFactory.GetVolumeGroupReplicationClassListType()
 		if err := v.reconciler.List(v.ctx, concreteList, listOptions...); err != nil {
-			v.log.Error(err, "Failed to list Group Replication Classes",
-				"labeled", labels.Set(labelSelector.MatchLabels))
+			// Check if the error is due to the type not being registered in the scheme
+			// This can happen when annotation forces an API but CRDs aren't installed
+			if strings.Contains(err.Error(), "no kind is registered for the type") {
+				v.log.Info("VolumeGroupReplicationClass type not available in scheme, skipping",
+					"error", err.Error())
+				// Set empty list and continue - this is expected when CRDs aren't installed
+				v.grpReplClassList = v.replicationFactory.NewVolumeGroupReplicationClassList()
+			} else {
+				v.log.Error(err, "Failed to list Group Replication Classes",
+					"labeled", labels.Set(labelSelector.MatchLabels))
 
-			return fmt.Errorf("failed to list Group Replication Classes, %w", err)
+				return fmt.Errorf("failed to list Group Replication Classes, %w", err)
+			}
+		} else {
+			// Wrap the concrete list in our interface
+			v.grpReplClassList = v.replicationFactory.WrapVolumeGroupReplicationClassList(concreteList)
+			v.log.Info("Number of Group Replication Classes", "count", len(v.grpReplClassList.GetItems()))
 		}
-
-		// Wrap the concrete list in our interface
-		v.grpReplClassList = v.replicationFactory.WrapVolumeGroupReplicationClassList(concreteList)
-		v.log.Info("Number of Group Replication Classes", "count", len(v.grpReplClassList.GetItems()))
 	}
 
 	v.vrcUpdated = true
