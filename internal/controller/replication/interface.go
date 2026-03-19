@@ -41,6 +41,8 @@ type VolumeGroupReplicationInterface interface {
 	GetStatus() VolumeGroupReplicationStatusInterface
 	SetSpec(VolumeGroupReplicationSpecInterface)
 	SetStatus(VolumeGroupReplicationStatusInterface)
+	// GetClientObject returns the underlying client.Object for use with Kubernetes client operations
+	GetClientObject() client.Object
 }
 
 // VolumeGroupReplicationSpecInterface defines the common interface for VolumeGroupReplication spec

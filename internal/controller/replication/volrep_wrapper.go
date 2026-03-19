@@ -7,11 +7,17 @@ import (
 	volrep "github.com/csi-addons/kubernetes-csi-addons/api/replication.storage/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 // VolrepVolumeGroupReplication wraps volrep.VolumeGroupReplication to implement the interface
 type VolrepVolumeGroupReplication struct {
 	*volrep.VolumeGroupReplication
+}
+
+// GetClientObject returns the underlying client.Object for Kubernetes operations
+func (v *VolrepVolumeGroupReplication) GetClientObject() client.Object {
+	return v.VolumeGroupReplication
 }
 
 // GetSpec returns the spec

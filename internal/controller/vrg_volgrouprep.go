@@ -822,17 +822,20 @@ func (v *VRGInstance) createVGR(vrNamespacedName types.NamespacedName,
 	// Update the VGR with the modified spec
 	volRep.SetSpec(spec)
 
+	// Get the underlying client.Object for Kubernetes operations
+	clientObj := volRep.GetClientObject()
+
 	if !vrgInAdminNamespace(v.instance, v.ramenConfig) {
 		// This is to keep existing behavior of ramen.
 		// Set the owner reference only for the VRs which are in the same namespace as the VRG and
 		// when VRG is not in the admin namespace.
-		if err := ctrl.SetControllerReference(v.instance, volRep, v.reconciler.Scheme); err != nil {
+		if err := ctrl.SetControllerReference(v.instance, clientObj, v.reconciler.Scheme); err != nil {
 			return fmt.Errorf("failed to set owner reference to VolumeGroupReplication resource (%s/%s), %w",
 				volRep.GetName(), volRep.GetNamespace(), err)
 		}
 	}
 
-	if err := v.reconciler.Create(v.ctx, volRep); err != nil {
+	if err := v.reconciler.Create(v.ctx, clientObj); err != nil {
 		return fmt.Errorf("failed to create VolumeGroupReplication resource (%s/%s), %w",
 			volRep.GetName(), volRep.GetNamespace(), err)
 	}
