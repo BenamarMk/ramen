@@ -37,7 +37,7 @@ func (f *ReplicationFactory) SetAnnotations(annotations map[string]string) {
 
 // NewVolumeGroupReplication creates a new VolumeGroupReplication object
 func (f *ReplicationFactory) NewVolumeGroupReplication(name, namespace string) VolumeGroupReplicationInterface {
-	if f.detector.IsVolumeGroupReplicationAvailable(f.ctx) {
+	if f.IsUsingVolrep() {
 		return &VolrepVolumeGroupReplication{
 			VolumeGroupReplication: &volrep.VolumeGroupReplication{
 				ObjectMeta: metav1.ObjectMeta{
@@ -60,7 +60,7 @@ func (f *ReplicationFactory) NewVolumeGroupReplication(name, namespace string) V
 
 // NewVolumeGroupReplicationClass creates a new VolumeGroupReplicationClass object
 func (f *ReplicationFactory) NewVolumeGroupReplicationClass(name string) VolumeGroupReplicationClassInterface {
-	if f.detector.IsVolumeGroupReplicationClassAvailable(f.ctx) {
+	if f.IsUsingVolrep() {
 		return &VolrepVolumeGroupReplicationClass{
 			VolumeGroupReplicationClass: &volrep.VolumeGroupReplicationClass{
 				ObjectMeta: metav1.ObjectMeta{
@@ -81,7 +81,7 @@ func (f *ReplicationFactory) NewVolumeGroupReplicationClass(name string) VolumeG
 
 // NewVolumeGroupReplicationClassList creates a new VolumeGroupReplicationClassList object
 func (f *ReplicationFactory) NewVolumeGroupReplicationClassList() VolumeGroupReplicationClassListInterface {
-	if f.detector.IsVolumeGroupReplicationClassAvailable(f.ctx) {
+	if f.IsUsingVolrep() {
 		return &VolrepVolumeGroupReplicationClassList{
 			VolumeGroupReplicationClassList: &volrep.VolumeGroupReplicationClassList{},
 		}
@@ -94,7 +94,7 @@ func (f *ReplicationFactory) NewVolumeGroupReplicationClassList() VolumeGroupRep
 
 // NewVolumeGroupReplicationContent creates a new VolumeGroupReplicationContent object
 func (f *ReplicationFactory) NewVolumeGroupReplicationContent(name string) VolumeGroupReplicationContentInterface {
-	if f.detector.IsVolumeGroupReplicationContentAvailable(f.ctx) {
+	if f.IsUsingVolrep() {
 		return &VolrepVolumeGroupReplicationContent{
 			VolumeGroupReplicationContent: &volrep.VolumeGroupReplicationContent{
 				ObjectMeta: metav1.ObjectMeta{
