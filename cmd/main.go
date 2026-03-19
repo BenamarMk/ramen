@@ -11,6 +11,7 @@ import (
 	"time"
 
 	volsyncv1alpha1 "github.com/backube/volsync/api/v1alpha1"
+	neutral "github.com/BenamarMk/replication-storage-io-crds/api/v1alpha1"
 	csiaddonsv1alpha1 "github.com/csi-addons/kubernetes-csi-addons/api/csiaddons/v1alpha1"
 	volrep "github.com/csi-addons/kubernetes-csi-addons/api/replication.storage/v1alpha1"
 	snapv1 "github.com/kubernetes-csi/external-snapshotter/client/v8/apis/volumesnapshot/v1"
@@ -119,6 +120,7 @@ func configureController(ramenConfig *ramendrv1alpha1.RamenConfig) error {
 	} else {
 		utilruntime.Must(velero.AddToScheme(scheme))
 		utilruntime.Must(volrep.AddToScheme(scheme))
+		utilruntime.Must(neutral.AddToScheme(scheme))
 		utilruntime.Must(volsyncv1alpha1.AddToScheme(scheme))
 		utilruntime.Must(snapv1.AddToScheme(scheme))
 		utilruntime.Must(groupsnapv1beta1.AddToScheme(scheme))
