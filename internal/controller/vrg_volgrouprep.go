@@ -18,6 +18,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	ramendrv1alpha1 "github.com/ramendr/ramen/api/v1alpha1"
+	"github.com/ramendr/ramen/internal/controller/replication"
 	rmnutil "github.com/ramendr/ramen/internal/controller/util"
 )
 
@@ -797,24 +798,29 @@ func (v *VRGInstance) createVGR(vrNamespacedName types.NamespacedName,
 
 	selector := metav1.AddLabelToSelector(&v.recipeElements.PvcSelector.LabelSelector, rmnutil.ConsistencyGroupLabel, cg)
 
-	volRep := &volrep.VolumeGroupReplication{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      vrNamespacedName.Name,
-			Namespace: vrNamespacedName.Namespace,
-			Labels:    rmnutil.OwnerLabels(v.instance),
-		},
-		Spec: volrep.VolumeGroupReplicationSpec{
-			ReplicationState:                state,
-			VolumeReplicationClassName:      volumeReplicationClassName,
-			VolumeGroupReplicationClassName: volumeGroupReplicationClass.GetName(),
-			External:                        offloaded,
-			Source: volrep.VolumeGroupReplicationSource{
-				Selector: selector,
-			},
-		},
-	}
+	// Use factory to create the appropriate VGR type (volrep or neutral)
+	volRep := v.replicationFactory.NewVolumeGroupReplication(
+		vrNamespacedName.Name,
+		vrNamespacedName.Namespace,
+	)
 
+	// Set metadata
+	volRep.SetLabels(rmnutil.OwnerLabels(v.instance))
 	rmnutil.AddLabel(volRep, rmnutil.CreatedByRamenLabel, "true")
+
+	// Set spec fields using interface methods
+	spec := volRep.GetSpec()
+	spec.SetReplicationState(replication.ReplicationState(state))
+	spec.SetVolumeReplicationClassName(volumeReplicationClassName)
+	spec.SetVolumeGroupReplicationClassName(volumeGroupReplicationClass.GetName())
+	spec.SetExternal(offloaded)
+	
+	// Set selector on source
+	source := spec.GetSource()
+	source.SetSelector(selector)
+	
+	// Update the VGR with the modified spec
+	volRep.SetSpec(spec)
 
 	if !vrgInAdminNamespace(v.instance, v.ramenConfig) {
 		// This is to keep existing behavior of ramen.
