@@ -406,21 +406,44 @@ func (r *DRClusterConfigReconciler) listDRSupportedVRCs(ctx context.Context) ([]
 }
 
 // listDRSupportedVGRCs returns a list of VolumeGroupReplicationClasses that are marked as DR supported
+// Returns classes from both volrep and neutral APIs if both are available
 func (r *DRClusterConfigReconciler) listDRSupportedVGRCs(ctx context.Context) ([]string, error) {
 	vgrcs := []string{}
 
-	vgrClasses := &volrep.VolumeGroupReplicationClassList{}
-	if err := r.Client.List(ctx, vgrClasses); err != nil {
-		return nil, fmt.Errorf("failed to list VolumeGroupReplicationClasses, %w", err)
-	}
-
-	for i := range vgrClasses.Items {
-		if !util.HasLabel(&vgrClasses.Items[i], GroupReplicationIDLabel) {
-			continue
+	// Detect which CRD types are available
+	crdDetector := replication.NewCRDDetector(r.Client)
+	
+	// Check for volrep API classes
+	if crdDetector.IsVolumeGroupReplicationClassAvailable(ctx) {
+		vgrClasses := &volrep.VolumeGroupReplicationClassList{}
+		if err := r.Client.List(ctx, vgrClasses); err != nil {
+			return nil, fmt.Errorf("failed to list VolumeGroupReplicationClasses (volrep), %w", err)
 		}
 
-		vgrcs = append(vgrcs, vgrClasses.Items[i].Name)
+		for i := range vgrClasses.Items {
+			if !util.HasLabel(&vgrClasses.Items[i], GroupReplicationIDLabel) {
+				continue
+			}
+
+			vgrcs = append(vgrcs, vgrClasses.Items[i].Name)
+		}
 	}
+	
+	// Check for neutral API classes (independent of volrep check)
+	// Note: We check for neutral CRDs by attempting to list them
+	// If the CRDs don't exist, the List will fail and we skip
+	neutralClasses := &neutral.VolumeGroupReplicationClassList{}
+	if err := r.Client.List(ctx, neutralClasses); err == nil {
+		// Neutral CRDs exist, add their classes
+		for i := range neutralClasses.Items {
+			if !util.HasLabel(&neutralClasses.Items[i], GroupReplicationIDLabel) {
+				continue
+			}
+
+			vgrcs = append(vgrcs, neutralClasses.Items[i].Name)
+		}
+	}
+	// If neutral List fails, it just means those CRDs aren't installed - not an error
 
 	return vgrcs, nil
 }
