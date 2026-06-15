@@ -54,6 +54,11 @@ const (
 	// failed over from. It is to aid deletion of the decision once VRG is noted as Secondary on the cluster
 	PlacementDecisionReasonFailoverRetained = "RetainedForFailover"
 
+	// PlacementDecisionReasonTestFailoverRetained is a reason added to retain a cluster decision during
+	// test failover (dryRun). Unlike RetainedForFailover, cleanup restores this decision as the active
+	// placement instead of removing it.
+	PlacementDecisionReasonTestFailoverRetained = "RetainedForTestFailover"
+
 	// Maximum retries to create PlacementDecisionName with an increasing index in case of conflicts
 	// with existing PlacementDecision resources
 	MaxPlacementDecisionConflictCount = 5
@@ -1885,6 +1890,11 @@ func (r *DRPlacementControlReconciler) getClusterDecisionFromPlacementRule(plRul
 	}
 }
 
+func isRetainedForFailover(reason string) bool {
+	return reason == PlacementDecisionReasonFailoverRetained ||
+		reason == PlacementDecisionReasonTestFailoverRetained
+}
+
 // getPlacementDecisionFromPlacement returns a PlacementDecision for the passed in Placement if found, and nil otherwise
 // - The PlacementDecision is determined by listing all PlacementDecisions in the Placement namespace filtered on the
 // Placement label as set by OCM
@@ -1922,7 +1932,7 @@ func (r *DRPlacementControlReconciler) getPlacementDecisionFromPlacement(placeme
 	decisionCount := 0
 
 	for idx := range plDecision.Status.Decisions {
-		if plDecision.Status.Decisions[idx].Reason == PlacementDecisionReasonFailoverRetained {
+		if isRetainedForFailover(plDecision.Status.Decisions[idx].Reason) {
 			continue
 		}
 
@@ -1956,7 +1966,7 @@ func (r *DRPlacementControlReconciler) getClusterDecisionFromPlacement(placement
 	}
 
 	for idx := range plDecision.Status.Decisions {
-		if plDecision.Status.Decisions[idx].Reason == PlacementDecisionReasonFailoverRetained {
+		if isRetainedForFailover(plDecision.Status.Decisions[idx].Reason) {
 			continue
 		}
 
@@ -2037,7 +2047,7 @@ func (r *DRPlacementControlReconciler) createOrUpdatePlacementDecision(ctx conte
 	decisions := []clrapiv1beta1.ClusterDecision{}
 
 	for idx := range plDecision.Status.Decisions {
-		if plDecision.Status.Decisions[idx].Reason != PlacementDecisionReasonFailoverRetained {
+		if !isRetainedForFailover(plDecision.Status.Decisions[idx].Reason) {
 			continue
 		}
 
@@ -2118,12 +2128,13 @@ func (r *DRPlacementControlReconciler) removeClusterDecisionForFailover(
 	ctx context.Context,
 	placement interface{},
 	clusterName string,
+	testFailoverCleanup bool,
 ) error {
 	switch obj := placement.(type) {
 	case *plrv1.PlacementRule:
-		return r.removePlacementRuleClusterDecisionForFailover(ctx, obj, clusterName)
+		return r.removePlacementRuleClusterDecisionForFailover(ctx, obj, clusterName, testFailoverCleanup)
 	case *clrapiv1beta1.Placement:
-		return r.removePlacementClusterDecisionForFailover(ctx, obj, clusterName)
+		return r.removePlacementClusterDecisionForFailover(ctx, obj, clusterName, testFailoverCleanup)
 	default:
 		return fmt.Errorf("failed to find Placement or PlacementRule")
 	}
@@ -2133,16 +2144,22 @@ func (r *DRPlacementControlReconciler) removePlacementRuleClusterDecisionForFail
 	ctx context.Context,
 	placement *plrv1.PlacementRule,
 	clusterName string,
+	testFailoverCleanup bool,
 ) error {
 	return nil
 }
 
-// removePlacementClusterDecisionForFailover removes a cluster decision that matches the passed in clusterName and has
-// the reason as PlacementDecisionReasonFailoverRetained
+// removePlacementClusterDecisionForFailover removes a cluster decision for failover cleanup.
+// For normal failover: removes the decision matching clusterName with reason RetainedForFailover.
+// For test failover cleanup: keeps the RetainedForTestFailover decision (restoring it as active)
+// and removes all other decisions.
+//
+//nolint:cyclop,gocognit,funlen
 func (r *DRPlacementControlReconciler) removePlacementClusterDecisionForFailover(
 	ctx context.Context,
 	placement *clrapiv1beta1.Placement,
 	clusterName string,
+	testFailoverCleanup bool,
 ) error {
 	plDecision, err := r.getPlacementDecisionFromPlacement(placement)
 	if err != nil {
@@ -2156,15 +2173,33 @@ func (r *DRPlacementControlReconciler) removePlacementClusterDecisionForFailover
 	dropped := false
 	decisions := []clrapiv1beta1.ClusterDecision{}
 
-	for idx := range plDecision.Status.Decisions {
-		if plDecision.Status.Decisions[idx].Reason == PlacementDecisionReasonFailoverRetained &&
-			plDecision.Status.Decisions[idx].ClusterName == clusterName {
-			dropped = true
-
-			continue
+	if testFailoverCleanup {
+		// Test failover cleanup: restore the original primary as the active placement.
+		// Keep only the decision that was retained for test failover and does not match
+		// clusterName (the test failover cluster being cleaned up). Clear its reason so it
+		// becomes the active decision again. Drop all others including clusterName's decision.
+		for idx := range plDecision.Status.Decisions {
+			if plDecision.Status.Decisions[idx].Reason == PlacementDecisionReasonTestFailoverRetained &&
+				plDecision.Status.Decisions[idx].ClusterName != clusterName {
+				plDecision.Status.Decisions[idx].Reason = plDecision.Status.Decisions[idx].ClusterName
+				decisions = append(decisions, plDecision.Status.Decisions[idx])
+			} else {
+				dropped = true
+			}
 		}
+	} else {
+		// Normal failover cleanup: remove the retained decision for the old primary (clusterName)
+		// that was kept during failover, and preserve all other decisions.
+		for idx := range plDecision.Status.Decisions {
+			if plDecision.Status.Decisions[idx].Reason == PlacementDecisionReasonFailoverRetained &&
+				plDecision.Status.Decisions[idx].ClusterName == clusterName {
+				dropped = true
 
-		decisions = append(decisions, plDecision.Status.Decisions[idx])
+				continue
+			}
+
+			decisions = append(decisions, plDecision.Status.Decisions[idx])
+		}
 	}
 
 	if !dropped {
@@ -2186,6 +2221,7 @@ func (r *DRPlacementControlReconciler) removePlacementClusterDecisionForFailover
 	r.Log.Info(
 		"Updated PlacementDecision to drop cluster decision for failover",
 		"ClusterName", clusterName,
+		"TestFailoverCleanup", testFailoverCleanup,
 		"PlacementDecision", plDecision.Status.Decisions,
 	)
 
@@ -2198,12 +2234,13 @@ func (r *DRPlacementControlReconciler) retainClusterDecisionAsFailover(
 	ctx context.Context,
 	placement interface{},
 	cluster string,
+	dryRun bool,
 ) error {
 	switch obj := placement.(type) {
 	case *plrv1.PlacementRule:
-		return r.retainPlacementRuleClusterDecisionAsFailover(ctx, obj, cluster)
+		return r.retainPlacementRuleClusterDecisionAsFailover(ctx, obj, cluster, dryRun)
 	case *clrapiv1beta1.Placement:
-		return r.retainPlacementClusterDecisionAsFailover(ctx, obj, cluster)
+		return r.retainPlacementClusterDecisionAsFailover(ctx, obj, cluster, dryRun)
 	default:
 		return fmt.Errorf("failed to find Placement or PlacementRule")
 	}
@@ -2213,6 +2250,7 @@ func (r *DRPlacementControlReconciler) retainPlacementRuleClusterDecisionAsFailo
 	ctx context.Context,
 	placement *plrv1.PlacementRule,
 	cluster string,
+	dryRun bool,
 ) error {
 	return nil
 }
@@ -2221,6 +2259,7 @@ func (r *DRPlacementControlReconciler) retainPlacementClusterDecisionAsFailover(
 	ctx context.Context,
 	placement *clrapiv1beta1.Placement,
 	cluster string,
+	dryRun bool,
 ) error {
 	plDecision, err := r.getPlacementDecisionFromPlacement(placement)
 	if err != nil {
@@ -2247,11 +2286,16 @@ func (r *DRPlacementControlReconciler) retainPlacementClusterDecisionAsFailover(
 			continue
 		}
 
-		if plDecision.Status.Decisions[idx].Reason == PlacementDecisionReasonFailoverRetained {
+		if isRetainedForFailover(plDecision.Status.Decisions[idx].Reason) {
 			continue
 		}
 
-		plDecision.Status.Decisions[idx].Reason = PlacementDecisionReasonFailoverRetained
+		reason := PlacementDecisionReasonFailoverRetained
+		if dryRun {
+			reason = PlacementDecisionReasonTestFailoverRetained
+		}
+
+		plDecision.Status.Decisions[idx].Reason = reason
 		if err := r.Status().Update(ctx, plDecision); err != nil {
 			return fmt.Errorf(
 				"failed to update placementDecision status to retain cluster decision for failover (%w)",

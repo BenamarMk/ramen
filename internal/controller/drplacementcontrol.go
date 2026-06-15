@@ -159,10 +159,6 @@ func (d *DRPCInstance) executeAction() (bool, error) {
 func (d *DRPCInstance) RunInitialDeployment() (bool, error) {
 	d.log.Info("Running initial deployment")
 
-	if d.instance.Spec.DryRun && d.instance.Spec.Action == rmn.ActionFailover {
-		rmnutil.AddAnnotation(d.instance, DRPCTestFailoverDryRunAnnotation, DRPCTestFailoverDryRunAnnotationValueTrue)
-	}
-
 	const done = true
 
 	homeCluster, homeClusterNamespace := d.getHomeClusterForInitialDeploy()
@@ -378,11 +374,16 @@ func (d *DRPCInstance) startDeploying(homeCluster, homeClusterNamespace string) 
 func (d *DRPCInstance) RunFailover() (bool, error) {
 	d.log.Info("Entering RunFailover", "state", d.getLastDRState())
 
-	if d.instance.Spec.DryRun && d.instance.Spec.Action == rmn.ActionFailover {
-		rmnutil.AddAnnotation(d.instance, DRPCTestFailoverDryRunAnnotation, DRPCTestFailoverDryRunAnnotationValueTrue)
-	}
-
 	const done = true
+
+	if d.instance.Spec.DryRun {
+		added := rmnutil.AddAnnotation(d.instance, DRPCTestFailoverDryRunAnnotation, DRPCTestFailoverDryRunAnnotationValueTrue)
+		if added {
+			if err := d.reconciler.Update(d.ctx, d.instance); err != nil {
+				return !done, nil
+			}
+		}
+	}
 
 	if d.instance.Spec.FailoverCluster == "" {
 		const msg = "missing value for spec.FailoverCluster"
@@ -578,7 +579,7 @@ func (d *DRPCInstance) switchToFailoverCluster() (bool, error) {
 
 	newHomeCluster := d.instance.Spec.FailoverCluster
 
-	err := d.reconciler.retainClusterDecisionAsFailover(d.ctx, d.userPlacement, curHomeCluster)
+	err := d.reconciler.retainClusterDecisionAsFailover(d.ctx, d.userPlacement, curHomeCluster, d.instance.Spec.DryRun)
 	if err == nil {
 		err = d.switchToCluster(newHomeCluster, "")
 	}
@@ -914,10 +915,6 @@ func checkActivationForStorageIdentifier(
 //nolint:gocognit,cyclop,funlen,gocyclo
 func (d *DRPCInstance) RunRelocate() (bool, error) {
 	d.log.Info("Entering RunRelocate", "state", d.getLastDRState(), "progression", d.getProgression())
-
-	if d.instance.Spec.DryRun && d.instance.Spec.Action == rmn.ActionFailover {
-		rmnutil.AddAnnotation(d.instance, DRPCTestFailoverDryRunAnnotation, DRPCTestFailoverDryRunAnnotationValueTrue)
-	}
 
 	const done = true
 
@@ -2359,7 +2356,12 @@ func (d *DRPCInstance) cleanupSecondary(clusterName, clusterToSkip string) (bool
 		d.setDiscoveredAppGCProgression(clusterToSkip)
 	}
 
-	if err = d.reconciler.removeClusterDecisionForFailover(d.ctx, d.userPlacement, clusterName); err != nil {
+	testFailoverCleanup := d.instance.GetAnnotations()[DRPCTestFailoverDryRunAnnotation] ==
+		DRPCTestFailoverDryRunAnnotationValueTrue
+
+	err = d.reconciler.removeClusterDecisionForFailover(
+		d.ctx, d.userPlacement, clusterName, testFailoverCleanup)
+	if err != nil {
 		return !peerReady, err
 	}
 
