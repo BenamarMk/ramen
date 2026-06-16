@@ -583,7 +583,7 @@ func (d *DRPCInstance) switchToFailoverCluster() (bool, error) {
 
 	newHomeCluster := d.instance.Spec.FailoverCluster
 
-	err := d.reconciler.retainClusterDecisionAsFailover(d.ctx, d.userPlacement, curHomeCluster, d.instance.Spec.DryRun)
+	err := d.reconciler.retainClusterDecisionAsFailover(d.ctx, d.userPlacement, curHomeCluster)
 	if err == nil {
 		err = d.switchToCluster(newHomeCluster, "")
 	}

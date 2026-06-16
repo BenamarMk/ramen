@@ -2111,6 +2111,7 @@ func (r *DRPlacementControlReconciler) removePlacementClusterDecisionForFailover
 	if testFailoverCleanup {
 		// Test failover cleanup: drop the test failover cluster (clusterToDrop) and keep
 		// all other decisions, restoring the original primary as the active placement.
+		// Clear the RetainedForFailover reason so the decision becomes active again.
 		for idx := range plDecision.Status.Decisions {
 			if plDecision.Status.Decisions[idx].ClusterName == clusterToDrop {
 				dropped = true
@@ -2118,6 +2119,7 @@ func (r *DRPlacementControlReconciler) removePlacementClusterDecisionForFailover
 				continue
 			}
 
+			plDecision.Status.Decisions[idx].Reason = plDecision.Status.Decisions[idx].ClusterName
 			decisions = append(decisions, plDecision.Status.Decisions[idx])
 		}
 	} else {
@@ -2167,13 +2169,12 @@ func (r *DRPlacementControlReconciler) retainClusterDecisionAsFailover(
 	ctx context.Context,
 	placement interface{},
 	cluster string,
-	dryRun bool,
 ) error {
 	switch obj := placement.(type) {
 	case *plrv1.PlacementRule:
-		return r.retainPlacementRuleClusterDecisionAsFailover(ctx, obj, cluster, dryRun)
+		return r.retainPlacementRuleClusterDecisionAsFailover(ctx, obj, cluster)
 	case *clrapiv1beta1.Placement:
-		return r.retainPlacementClusterDecisionAsFailover(ctx, obj, cluster, dryRun)
+		return r.retainPlacementClusterDecisionAsFailover(ctx, obj, cluster)
 	default:
 		return fmt.Errorf("failed to find Placement or PlacementRule")
 	}
@@ -2183,7 +2184,6 @@ func (r *DRPlacementControlReconciler) retainPlacementRuleClusterDecisionAsFailo
 	ctx context.Context,
 	placement *plrv1.PlacementRule,
 	cluster string,
-	dryRun bool,
 ) error {
 	return nil
 }
@@ -2192,12 +2192,7 @@ func (r *DRPlacementControlReconciler) retainPlacementClusterDecisionAsFailover(
 	ctx context.Context,
 	placement *clrapiv1beta1.Placement,
 	cluster string,
-	dryRun bool,
 ) error {
-	if dryRun {
-		return nil
-	}
-
 	plDecision, err := r.getPlacementDecisionFromPlacement(placement)
 	if err != nil {
 		return err
