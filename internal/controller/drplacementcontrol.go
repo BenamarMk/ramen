@@ -179,7 +179,10 @@ func (d *DRPCInstance) RunInitialDeployment() (bool, error) {
 
 	// Check if we already deployed in the homeCluster or elsewhere
 	deployed, clusterName := d.isDeployed(homeCluster)
-	if deployed && clusterName != homeCluster {
+	hasDryRunAnnotation := d.instance.GetAnnotations()[DRPCTestFailoverDryRunAnnotation] ==
+		DRPCTestFailoverDryRunAnnotationValueTrue
+
+	if deployed && (clusterName != homeCluster || hasDryRunAnnotation) {
 		return d.ensureInitialDeployActionCompleted(homeCluster)
 	}
 
@@ -377,10 +380,11 @@ func (d *DRPCInstance) RunFailover() (bool, error) {
 	const done = true
 
 	if d.instance.Spec.DryRun {
-		added := rmnutil.AddAnnotation(d.instance, DRPCTestFailoverDryRunAnnotation, DRPCTestFailoverDryRunAnnotationValueTrue)
+		added := rmnutil.AddAnnotation(d.instance,
+			DRPCTestFailoverDryRunAnnotation, DRPCTestFailoverDryRunAnnotationValueTrue)
 		if added {
 			if err := d.reconciler.Update(d.ctx, d.instance); err != nil {
-				return !done, nil
+				return !done, err
 			}
 		}
 	}
@@ -2257,7 +2261,7 @@ func isVRGSecondary(vrg *rmn.VolumeReplicationGroup) bool {
 	return (vrg.Spec.ReplicationState == rmn.Secondary)
 }
 
-func (d *DRPCInstance) EnsureCleanup(clusterToSkip string) error {
+func (d *DRPCInstance) EnsureCleanup(primaryCluster string) error {
 	d.log.Info("ensuring cleanup on secondaries")
 
 	condition := rmnutil.FindCondition(d.instance.Status.Conditions, rmn.ConditionPeerReady)
@@ -2282,18 +2286,18 @@ func (d *DRPCInstance) EnsureCleanup(clusterToSkip string) error {
 
 	d.log.Info(fmt.Sprintf("PeerReady Condition is %s, msg: %s", condition.Status, condition.Message))
 
-	return d.cleanupSecondaries(clusterToSkip)
+	return d.cleanupSecondaries(primaryCluster)
 }
 
-func (d *DRPCInstance) cleanupSecondaries(clusterToSkip string) error {
+func (d *DRPCInstance) cleanupSecondaries(primaryCluster string) error {
 	d.log.Info("Ensure secondary setup on peer")
 
-	for _, clusterName := range rmnutil.DRPolicyClusterNames(d.drPolicy) {
-		if clusterToSkip == clusterName {
+	for _, secondaryCluster := range rmnutil.DRPolicyClusterNames(d.drPolicy) {
+		if primaryCluster == secondaryCluster {
 			continue
 		}
 
-		peersReady, err := d.cleanupSecondary(clusterName, clusterToSkip)
+		peersReady, err := d.cleanupSecondary(secondaryCluster, primaryCluster)
 		if err != nil {
 			return err
 		}
@@ -2310,19 +2314,19 @@ func (d *DRPCInstance) cleanupSecondaries(clusterToSkip string) error {
 }
 
 //nolint:cyclop
-func (d *DRPCInstance) cleanupSecondary(clusterName, clusterToSkip string) (bool, error) {
+func (d *DRPCInstance) cleanupSecondary(secondaryCluster, primaryCluster string) (bool, error) {
 	peerReady := true
 
-	justUpdated, err := d.updateVRGState(clusterName, rmn.Secondary)
+	justUpdated, err := d.updateVRGState(secondaryCluster, rmn.Secondary)
 	if err != nil {
-		d.log.Info(fmt.Sprintf("Failed to update VRG state for cluster %s. Err (%v)", clusterName, err))
+		d.log.Info(fmt.Sprintf("Failed to update VRG state for cluster %s. Err (%v)", secondaryCluster, err))
 
 		// Recreate the VRG ManifestWork for the secondary. This typically happens during Hub Recovery.
 		// Ideally this will never be called due to adoption of VRG in place, in the case of upgrades from older
 		// scheme were VRG was not preserved for VR workloads, this can be hit IFF the upgrade happened when some
 		// workload was not in peerReady state.
 		if k8serrors.IsNotFound(err) {
-			err := d.EnsureSecondaryReplicationSetup(clusterToSkip)
+			err := d.EnsureSecondaryReplicationSetup(primaryCluster)
 			if err != nil {
 				return !peerReady, err
 			}
@@ -2333,7 +2337,7 @@ func (d *DRPCInstance) cleanupSecondary(clusterName, clusterToSkip string) (bool
 
 	// IFF just updated or MCV is reporting no VRG, no need to use MCV to check if the state has been
 	// applied. Wait for the next round of reconcile.
-	if justUpdated || d.vrgs[clusterName] == nil {
+	if justUpdated || d.vrgs[secondaryCluster] == nil {
 		return !peerReady, nil
 	}
 
@@ -2341,8 +2345,8 @@ func (d *DRPCInstance) cleanupSecondary(clusterName, clusterToSkip string) (bool
 	// and deleting PVCs (i.e removing the decision) in such a race. With this check it is certain that VRG has
 	// processed the current generation as Secondary and will do so in the future and there can be no outstanding
 	// reconciliation of an older generation VRG as Primary
-	if d.vrgs[clusterName].Spec.ReplicationState != rmn.Secondary ||
-		d.vrgs[clusterName].Status.ObservedGeneration != d.vrgs[clusterName].Generation {
+	if d.vrgs[secondaryCluster].Spec.ReplicationState != rmn.Secondary ||
+		d.vrgs[secondaryCluster].Status.ObservedGeneration != d.vrgs[secondaryCluster].Generation {
 		return !peerReady, nil
 	}
 
@@ -2353,23 +2357,23 @@ func (d *DRPCInstance) cleanupSecondary(clusterName, clusterToSkip string) (bool
 	// So set the progression to wait on user to clean up.
 	// If not discovered apps, then we can set the progression to cleaning up.
 	if isDiscoveredApp(d.instance) {
-		d.setDiscoveredAppGCProgression(clusterToSkip)
+		d.setDiscoveredAppGCProgression(primaryCluster)
 	}
 
 	testFailoverCleanup := d.instance.GetAnnotations()[DRPCTestFailoverDryRunAnnotation] ==
 		DRPCTestFailoverDryRunAnnotationValueTrue
 
 	err = d.reconciler.removeClusterDecisionForFailover(
-		d.ctx, d.userPlacement, clusterName, testFailoverCleanup)
+		d.ctx, d.userPlacement, secondaryCluster, testFailoverCleanup)
 	if err != nil {
 		return !peerReady, err
 	}
 
-	if !d.ensureVRGIsSecondaryOnCluster(clusterName) {
+	if !d.ensureVRGIsSecondaryOnCluster(secondaryCluster) {
 		return !peerReady, nil
 	}
 
-	if err := d.removeTestFailoverDryRunAnnotation(clusterName); err != nil {
+	if err := d.removeTestFailoverDryRunAnnotation(secondaryCluster); err != nil {
 		return !peerReady, err
 	}
 
