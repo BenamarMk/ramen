@@ -583,7 +583,7 @@ func (d *DRPCInstance) switchToFailoverCluster() (bool, error) {
 
 	newHomeCluster := d.instance.Spec.FailoverCluster
 
-	err := d.reconciler.retainClusterDecisionAsFailover(d.ctx, d.userPlacement, curHomeCluster)
+	err := d.reconciler.retainClusterDecisionAsFailover(d.ctx, d.userPlacement, curHomeCluster, d.instance.Spec.DryRun)
 	if err == nil {
 		err = d.switchToCluster(newHomeCluster, "")
 	}
@@ -2381,10 +2381,6 @@ func (d *DRPCInstance) cleanupSecondary(secondaryCluster, primaryCluster string)
 }
 
 func (d *DRPCInstance) removeTestFailoverDryRunAnnotation(clusterName string) error {
-	if d.instance.Spec.DryRun {
-		return nil
-	}
-
 	if d.instance.GetAnnotations()[DRPCTestFailoverDryRunAnnotation] != DRPCTestFailoverDryRunAnnotationValueTrue {
 		return nil
 	}

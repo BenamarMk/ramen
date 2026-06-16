@@ -54,6 +54,10 @@ const (
 	// failed over from. It is to aid deletion of the decision once VRG is noted as Secondary on the cluster
 	PlacementDecisionReasonFailoverRetained = "RetainedForFailover"
 
+	// PlacementDecisionReasonTestFailoverRetained marks a retained decision during test failover (dryRun).
+	// On cleanup, this decision is restored as the active placement (reason cleared to clusterName).
+	PlacementDecisionReasonTestFailoverRetained = "RetainedForTestFailover"
+
 	// Maximum retries to create PlacementDecisionName with an increasing index in case of conflicts
 	// with existing PlacementDecision resources
 	MaxPlacementDecisionConflictCount = 5
@@ -1867,7 +1871,7 @@ func (r *DRPlacementControlReconciler) getPlacementDecisionFromPlacement(placeme
 	decisionCount := 0
 
 	for idx := range plDecision.Status.Decisions {
-		if plDecision.Status.Decisions[idx].Reason == PlacementDecisionReasonFailoverRetained {
+		if isRetainedForFailover(plDecision.Status.Decisions[idx].Reason) {
 			continue
 		}
 
@@ -1883,6 +1887,11 @@ func (r *DRPlacementControlReconciler) getPlacementDecisionFromPlacement(placeme
 	}
 
 	return &plDecision, nil
+}
+
+func isRetainedForFailover(reason string) bool {
+	return reason == PlacementDecisionReasonFailoverRetained ||
+		reason == PlacementDecisionReasonTestFailoverRetained
 }
 
 // getClusterDecisionFromPlacement returns the cluster decision for a given Placement if found
@@ -1901,7 +1910,7 @@ func (r *DRPlacementControlReconciler) getClusterDecisionFromPlacement(placement
 	}
 
 	for idx := range plDecision.Status.Decisions {
-		if plDecision.Status.Decisions[idx].Reason == PlacementDecisionReasonFailoverRetained {
+		if isRetainedForFailover(plDecision.Status.Decisions[idx].Reason) {
 			continue
 		}
 
@@ -1980,10 +1989,20 @@ func (r *DRPlacementControlReconciler) createOrUpdatePlacementDecision(ctx conte
 	}
 
 	decisions := []clrapiv1beta1.ClusterDecision{}
+	entryFound := false
 
 	for idx := range plDecision.Status.Decisions {
-		if plDecision.Status.Decisions[idx].Reason != PlacementDecisionReasonFailoverRetained {
+		if !isRetainedForFailover(plDecision.Status.Decisions[idx].Reason) {
 			continue
+		}
+
+		if plDecision.Status.Decisions[idx].Reason == PlacementDecisionReasonTestFailoverRetained {
+			if newCD != nil && newCD.ClusterName == plDecision.Status.Decisions[idx].ClusterName {
+				plDecision.Status.Decisions[idx].Reason = plDecision.Status.Decisions[idx].ClusterName
+				entryFound = true
+			} else {
+				continue
+			}
 		}
 
 		decisions = append(decisions, plDecision.Status.Decisions[idx])
@@ -1993,7 +2012,7 @@ func (r *DRPlacementControlReconciler) createOrUpdatePlacementDecision(ctx conte
 		Decisions: decisions,
 	}
 
-	if newCD != nil {
+	if !entryFound && newCD != nil {
 		plDecision.Status.Decisions = append(plDecision.Status.Decisions, *newCD)
 	}
 
@@ -2111,7 +2130,7 @@ func (r *DRPlacementControlReconciler) removePlacementClusterDecisionForFailover
 	if testFailoverCleanup {
 		// Test failover cleanup: drop the test failover cluster (clusterToDrop) and keep
 		// all other decisions, restoring the original primary as the active placement.
-		// Clear the RetainedForFailover reason so the decision becomes active again.
+		// Clear the RetainedForTestFailover reason so the decision becomes active again.
 		for idx := range plDecision.Status.Decisions {
 			if plDecision.Status.Decisions[idx].ClusterName == clusterToDrop {
 				dropped = true
@@ -2119,7 +2138,10 @@ func (r *DRPlacementControlReconciler) removePlacementClusterDecisionForFailover
 				continue
 			}
 
-			plDecision.Status.Decisions[idx].Reason = plDecision.Status.Decisions[idx].ClusterName
+			if plDecision.Status.Decisions[idx].Reason == PlacementDecisionReasonTestFailoverRetained {
+				plDecision.Status.Decisions[idx].Reason = plDecision.Status.Decisions[idx].ClusterName
+			}
+
 			decisions = append(decisions, plDecision.Status.Decisions[idx])
 		}
 	} else {
@@ -2169,12 +2191,13 @@ func (r *DRPlacementControlReconciler) retainClusterDecisionAsFailover(
 	ctx context.Context,
 	placement interface{},
 	cluster string,
+	dryRun bool,
 ) error {
 	switch obj := placement.(type) {
 	case *plrv1.PlacementRule:
-		return r.retainPlacementRuleClusterDecisionAsFailover(ctx, obj, cluster)
+		return r.retainPlacementRuleClusterDecisionAsFailover(ctx, obj, cluster, dryRun)
 	case *clrapiv1beta1.Placement:
-		return r.retainPlacementClusterDecisionAsFailover(ctx, obj, cluster)
+		return r.retainPlacementClusterDecisionAsFailover(ctx, obj, cluster, dryRun)
 	default:
 		return fmt.Errorf("failed to find Placement or PlacementRule")
 	}
@@ -2184,6 +2207,7 @@ func (r *DRPlacementControlReconciler) retainPlacementRuleClusterDecisionAsFailo
 	ctx context.Context,
 	placement *plrv1.PlacementRule,
 	cluster string,
+	dryRun bool,
 ) error {
 	return nil
 }
@@ -2192,6 +2216,7 @@ func (r *DRPlacementControlReconciler) retainPlacementClusterDecisionAsFailover(
 	ctx context.Context,
 	placement *clrapiv1beta1.Placement,
 	cluster string,
+	dryRun bool,
 ) error {
 	plDecision, err := r.getPlacementDecisionFromPlacement(placement)
 	if err != nil {
@@ -2218,11 +2243,16 @@ func (r *DRPlacementControlReconciler) retainPlacementClusterDecisionAsFailover(
 			continue
 		}
 
-		if plDecision.Status.Decisions[idx].Reason == PlacementDecisionReasonFailoverRetained {
+		if isRetainedForFailover(plDecision.Status.Decisions[idx].Reason) {
 			continue
 		}
 
-		plDecision.Status.Decisions[idx].Reason = PlacementDecisionReasonFailoverRetained
+		reason := PlacementDecisionReasonFailoverRetained
+		if dryRun {
+			reason = PlacementDecisionReasonTestFailoverRetained
+		}
+
+		plDecision.Status.Decisions[idx].Reason = reason
 		if err := r.Status().Update(ctx, plDecision); err != nil {
 			return fmt.Errorf(
 				"failed to update placementDecision status to retain cluster decision for failover (%w)",
