@@ -553,6 +553,16 @@ func (h *volumeGroupSourceHandler) CreateOrUpdateReplicationSourceForRestoredPVC
 			Name:       replicationSource.Name,
 		})
 
+		protectedPVC := ramendrv1alpha1.ProtectedPVC{
+			Name:      originalPVCName,
+			Namespace: replicationSourceNamespace,
+		}
+		if err := h.VSHandler.AssignRDAndRSAsOwnerToProtectedPVC(replicationSource, protectedPVC); err != nil {
+			logger.Error(err, "Failed to assign RS ownership to PVC", "RS", replicationSource.Name, "PVC", originalPVCName)
+
+			return nil, createdOrUpdated, err
+		}
+
 		logger.Info("replication source successfully reconciled", "operation", op, "RestoredPVC", restoredPVC.RestoredPVCName)
 
 		createdOrUpdated = createdOrUpdated ||
