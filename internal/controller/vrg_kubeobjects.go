@@ -42,22 +42,15 @@ func kubeObjectsCaptureInterval(kubeObjectProtectionSpec *ramen.KubeObjectProtec
 	return kubeObjectProtectionSpec.CaptureInterval.Duration
 }
 
+// kubeObjectsCapturePathNamesAndNamePrefix adapts the shared helper in the
+// kubeobjects package, supplying the VRG S3 root this package owns. The naming
+// itself lives in kubeobjects/naming.go so that every consumer of a capture
+// derives it identically.
 func kubeObjectsCapturePathNamesAndNamePrefix(
 	namespaceName, vrgName string, captureNumber int64, kubeObjects kubeobjects.RequestsManager,
 ) (string, string, string) {
-	const numberBase = 10
-
-	number := strconv.FormatInt(captureNumber, numberBase)
-	pathName := s3PathNamePrefix(namespaceName, vrgName) + "kube-objects/" + number + "/"
-
-	return pathName,
-		pathName + kubeObjects.ProtectsPath(),
-		// TODO fix: may exceed name capacity
-		namespaceName + "--" + vrgName + "--" + number
-}
-
-func kubeObjectsCaptureName(prefix, groupName, s3ProfileName string) string {
-	return prefix + "--" + groupName + "--" + s3ProfileName
+	return kubeobjects.CapturePathNamesAndNamePrefix(
+		s3PathNamePrefix(namespaceName, vrgName), namespaceName, vrgName, captureNumber, kubeObjects)
 }
 
 func kubeObjectsRecoverNamePrefix(vrgNamespaceName, vrgName string) string {
@@ -507,7 +500,7 @@ func (v *VRGInstance) kubeObjectsGroupCapture(
 	log logr.Logger,
 ) (requestsCompletedCount int, reqErr error) {
 	for _, s3StoreAccessor := range v.s3StoreAccessors {
-		requestName := kubeObjectsCaptureName(namePrefix, captureGroup.Name, s3StoreAccessor.S3ProfileName)
+		requestName := kubeobjects.CaptureName(namePrefix, captureGroup.Name, s3StoreAccessor.S3ProfileName)
 		log1 := log.WithValues("profile", s3StoreAccessor.S3ProfileName)
 
 		request, ok := requests[requestName]
@@ -815,7 +808,7 @@ func (v *VRGInstance) getRecoverOrProtectRequest(
 	return recoverRequest, ok, func() (kubeobjects.Request, error) {
 			pathName, _, captureNamePrefix := kubeObjectsCapturePathNamesAndNamePrefix(
 				sourceVrgNamespaceName, sourceVrgName, captureToRecoverFromIdentifier.Number, v.reconciler.kubeObjects)
-			captureName := kubeObjectsCaptureName(captureNamePrefix, recoverGroup.BackupName, s3StoreAccessor.S3ProfileName)
+			captureName := kubeobjects.CaptureName(captureNamePrefix, recoverGroup.BackupName, s3StoreAccessor.S3ProfileName)
 			captureRequest := captureRequests[captureName]
 
 			return v.reconciler.kubeObjects.RecoverRequestCreate(
@@ -1545,7 +1538,7 @@ func getFirstRequest(groups []kubeobjects.CaptureSpec, requests map[string]kubeo
 		}
 
 		// else it is a resource group
-		return requests[kubeObjectsCaptureName(namePrefix, cg.Name, s3ProfileName)]
+		return requests[kubeobjects.CaptureName(namePrefix, cg.Name, s3ProfileName)]
 	}
 
 	return nil
