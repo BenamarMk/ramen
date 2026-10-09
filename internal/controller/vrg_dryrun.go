@@ -4,6 +4,8 @@
 package controllers
 
 import (
+	"time"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 
@@ -18,6 +20,16 @@ import (
 // Keeping the seam this thin is the point. The production capture and restore
 // paths are untouched by the feature, so a test failover cannot regress a real
 // one, and the package can be deleted or replaced without unpicking anything.
+
+// dryRunRequeueInterval paces a run that is waiting on something.
+//
+// A test failover has no timeout and no failure state by design: a run that
+// cannot finish waits for a human indefinitely. That makes an immediate
+// requeue the wrong tool -- a stalled run would spin against the API server
+// for as long as nobody notices. Progress arrives on watch events anyway, so
+// this only needs to be often enough to pick up changes nothing watches, like
+// a PVC binding.
+const dryRunRequeueInterval = 30 * time.Second
 
 // reconcileDryRun builds a test copy of this workload beside the real one.
 //
@@ -35,7 +47,7 @@ func (v *VRGInstance) reconcileDryRun() ctrl.Result {
 			Requeue: true,
 		})
 
-		v.result.Requeue = true
+		v.result.RequeueAfter = dryRunRequeueInterval
 
 		return v.updateVRGConditionsAndStatus(v.result)
 	}
@@ -44,7 +56,7 @@ func (v *VRGInstance) reconcileDryRun() ctrl.Result {
 	if err != nil {
 		v.log.Error(err, "Dry run reconcile failed")
 
-		v.result.Requeue = true
+		v.result.RequeueAfter = dryRunRequeueInterval
 
 		return v.updateVRGConditionsAndStatus(v.result)
 	}
@@ -52,7 +64,7 @@ func (v *VRGInstance) reconcileDryRun() ctrl.Result {
 	v.setDryRunStatus(out)
 
 	if out.Requeue {
-		v.result.Requeue = true
+		v.result.RequeueAfter = dryRunRequeueInterval
 	}
 
 	return v.updateVRGConditionsAndStatus(v.result)
@@ -142,4 +154,36 @@ func (v *VRGInstance) setDryRunStatus(out dryrun.Output) {
 	}
 
 	v.instance.Status.DryRun = status
+}
+
+// dryRunHandOff gives the storage snapshots to the test namespaces and clears
+// away the run's Velero requests, so the test copy survives this cluster
+// being returned to Secondary, promoted to a real failover, or deleted.
+//
+// It replaces the old behavior of destroying the dry-run snapshots outright,
+// which would have taken the test volumes with them. A run that never reached
+// a given volume is still reclaimed rather than leaked; see dryrun.HandOff.
+func (v *VRGInstance) dryRunHandOff() error {
+	if !v.hadDryRun() {
+		return nil
+	}
+
+	in, err := v.dryRunInput()
+	if err != nil {
+		return err
+	}
+
+	v.log.Info("Handing the dry run snapshots to the test copy")
+
+	return dryrun.HandOff(v.ctx, in)
+}
+
+// hadDryRun reports whether a test failover ever touched this VRG. Without it
+// the hand-off would run on every real failover, since the condition that
+// triggers it -- dryRun going false -- is also true for a VRG that was never
+// in a dry run at all.
+func (v *VRGInstance) hadDryRun() bool {
+	_, present := v.instance.GetAnnotations()[ramendrv1alpha1.DryRunAnnotation]
+
+	return present
 }

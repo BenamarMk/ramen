@@ -7,6 +7,7 @@ import (
 	"context"
 	"testing"
 
+	snapv1 "github.com/kubernetes-csi/external-snapshotter/client/v8/apis/volumesnapshot/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -31,6 +32,10 @@ func testScheme(t *testing.T) *runtime.Scheme {
 	}
 
 	if err := rmn.AddToScheme(scheme); err != nil {
+		t.Fatalf("scheme: %v", err)
+	}
+
+	if err := snapv1.AddToScheme(scheme); err != nil {
 		t.Fatalf("scheme: %v", err)
 	}
 

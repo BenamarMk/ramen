@@ -81,3 +81,35 @@ func NamespaceMapping(sourceNamespaces []string, runID string) (map[string]strin
 
 	return mapping, nil
 }
+
+const (
+	// SnapshotLabel marks a snapshot taken for a test failover.
+	SnapshotLabel = "ramendr.openshift.io/dry-run-snapshot"
+
+	// VRGLabel identifies which VRG a dry-run snapshot belongs to.
+	VRGLabel = "ramendr.openshift.io/dry-run-vrg"
+)
+
+// SnapshotName is the dry-run snapshot of a protected PVC.
+//
+// Two sides depend on this name: the VRG takes the snapshot while the volumes
+// are promoted, and the hand-off looks it back up to give it to the test
+// namespace. It is defined here so neither side can drift from the other.
+func SnapshotName(pvcName string) string {
+	return pvcName + "-snapshot"
+}
+
+// SnapshotSelector matches every dry-run snapshot belonging to a VRG.
+func SnapshotSelector(vrgName string) map[string]string {
+	return map[string]string{
+		SnapshotLabel: "true",
+		VRGLabel:      vrgName,
+	}
+}
+
+// ImportedContentName is the cluster-scoped VolumeSnapshotContent that hands a
+// storage snapshot to a test namespace. Deterministic, so the hand-off can
+// find it again without a label search.
+func ImportedContentName(runID, pvcName string) string {
+	return "dryrun-" + runID + "-" + pvcName
+}

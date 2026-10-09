@@ -4,7 +4,6 @@
 package controllers
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"reflect"
@@ -27,6 +26,7 @@ import (
 
 	ramendrv1alpha1 "github.com/ramendr/ramen/api/v1alpha1"
 	recipecore "github.com/ramendr/ramen/internal/controller/core"
+	"github.com/ramendr/ramen/internal/controller/dryrun"
 	rmnutil "github.com/ramendr/ramen/internal/controller/util"
 )
 
@@ -74,16 +74,12 @@ func logWithPvcName(log logr.Logger, pvc *corev1.PersistentVolumeClaim) logr.Log
 func (v *VRGInstance) reconcileVolRepsAsPrimary() {
 	// Cleanup dry-run snapshots when promoting to real failover (DryRun: true → false)
 	if v.shouldCleanupDryRunSnapshots() {
-		v.log.Info("Promoting to real failover, cleaning up dry-run snapshots")
-
-		if err := cleanupDryRunSnapshots(v.ctx, v.reconciler.Client, v.log, v.instance, v.volRepPVCs); err != nil {
-			v.log.Error(err, "Failed to cleanup dry-run snapshots")
+		if err := v.dryRunHandOff(); err != nil {
+			v.log.Error(err, "Failed to hand the dry run snapshots to the test copy")
 			v.requeue()
 
 			return
 		}
-
-		v.log.Info("Dry-run snapshots cleaned up successfully, proceeding with real failover")
 	}
 
 	// Take snapshots only when all conditions are met:
@@ -209,13 +205,11 @@ func (v *VRGInstance) reconcileVolRepsAsSecondary() bool {
 	// This happens when user sets spec.dryRun=false or removes dryRun field from DRPC spec
 	// The VRG must delete all dry-run snapshots BEFORE proceeding
 	if v.shouldCleanupDryRunSnapshots() {
-		if err := cleanupDryRunSnapshots(v.ctx, v.reconciler.Client, v.log, v.instance, v.volRepPVCs); err != nil {
-			v.log.Error(err, "Failed to cleanup dry-run snapshots")
+		if err := v.dryRunHandOff(); err != nil {
+			v.log.Error(err, "Failed to hand the dry run snapshots to the test copy")
 
-			return true // Requeue to retry cleanup
+			return true // Requeue to retry
 		}
-
-		v.log.Info("Dry-run snapshots cleaned up successfully, proceeding with operation")
 	}
 
 	groupPVCs := make(map[types.NamespacedName][]*corev1.PersistentVolumeClaim)
@@ -3831,17 +3825,19 @@ func (v *VRGInstance) createSnapshotForPVC(pvc *corev1.PersistentVolumeClaim) er
 }
 
 func (v *VRGInstance) createSnapshot(pvc *corev1.PersistentVolumeClaim, snapshotClassName string) error {
-	snapName := fmt.Sprintf("%s-snapshot", pvc.Name)
+	// The name and labels are defined in the dryrun package: the hand-off
+	// looks this snapshot back up to give it to the test namespace, so the
+	// two sides must not drift.
+	snapName := dryrun.SnapshotName(pvc.Name)
 	pvcName := pvc.Name
+	labels := dryrun.SnapshotSelector(v.instance.Name)
+	labels[rmnutil.CreatedByRamenLabel] = "true"
+
 	snap := &snapv1.VolumeSnapshot{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      snapName,
 			Namespace: pvc.Namespace,
-			Labels: map[string]string{
-				dryRunSnapshotLabel:         "true",
-				dryRunVRGLabel:              v.instance.Name,
-				rmnutil.CreatedByRamenLabel: "true",
-			},
+			Labels:    labels,
 		},
 		Spec: snapv1.VolumeSnapshotSpec{
 			Source: snapv1.VolumeSnapshotSource{
@@ -3867,67 +3863,6 @@ func (v *VRGInstance) createSnapshot(pvc *corev1.PersistentVolumeClaim, snapshot
 
 	v.log.Info("Created VolumeSnapshot for PVC",
 		"snapshot", snapName, "pvc", pvc.Name, "snapshotClass", snapshotClassName)
-
-	return nil
-}
-
-// cleanupDryRunSnapshots deletes all snapshots with dry-run label for this specific VRG
-// This is called when a dry-run is aborted or promoted to real failover
-func cleanupDryRunSnapshots(
-	ctx context.Context,
-	c client.Client,
-	log logr.Logger,
-	instance *ramendrv1alpha1.VolumeReplicationGroup,
-	_ []corev1.PersistentVolumeClaim,
-) error {
-	log.Info("Cleaning up dry-run snapshots for VRG", "vrg", instance.Name)
-
-	deletedCount := 0
-	errorCount := 0
-
-	// List all snapshots with dry-run label for this specific VRG across all namespaces
-	snapshots := &snapv1.VolumeSnapshotList{}
-	if err := c.List(ctx, snapshots,
-		client.MatchingLabels{
-			dryRunSnapshotLabel: "true",
-			dryRunVRGLabel:      instance.Name,
-		},
-	); err != nil {
-		log.Error(err, "failed to list dry-run snapshots for cleanup", "vrg", instance.Name)
-
-		return fmt.Errorf("failed to list dry-run snapshots: %w", err)
-	}
-
-	// Early return if no snapshots to clean up
-	if len(snapshots.Items) == 0 {
-		log.Info("No dry-run snapshots found for cleanup")
-
-		return nil
-	}
-
-	// Delete each snapshot
-	for i := range snapshots.Items {
-		snapshot := &snapshots.Items[i]
-		if err := c.Delete(ctx, snapshot); err != nil {
-			if !k8serrors.IsNotFound(err) {
-				log.Error(err, "failed to delete snapshot", "snapshot", snapshot.Name, "namespace", snapshot.Namespace)
-
-				errorCount++
-
-				continue
-			}
-		}
-
-		log.Info("Deleted dry-run snapshot", "snapshot", snapshot.Name, "namespace", snapshot.Namespace)
-
-		deletedCount++
-	}
-
-	log.Info("Dry-run snapshot cleanup completed", "deleted", deletedCount, "errors", errorCount)
-
-	if errorCount > 0 {
-		return fmt.Errorf("failed to delete %d snapshots during cleanup", errorCount)
-	}
 
 	return nil
 }

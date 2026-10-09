@@ -5,6 +5,7 @@ package dryrun
 
 import (
 	"context"
+	"strings"
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
@@ -143,26 +144,32 @@ func Reconcile(ctx context.Context, in Input) (Output, error) {
 		return out, nil
 	}
 
-	// TODO(phase 5): hand each dry-run snapshot to its test namespace and
-	// create the test PVC there.
+	pending, err := ensureTestVolumes(ctx, in, runID, mapping)
+	if err != nil {
+		out := inProgress(in, runID, err.Error())
+		out.NamespaceMapping = mapping
+
+		return out, nil
+	}
+
+	// Every test PVC must be Bound before the kube objects are restored: a
+	// workload restored against a claim that never binds sits Pending with
+	// nothing to say why.
+	if len(pending) > 0 {
+		out := inProgress(in, runID, strings.Join(pending, "; "))
+		out.NamespaceMapping = mapping
+
+		return out, nil
+	}
+
 	// TODO(phase 6): restore the kube objects into the test namespaces.
 	return Output{
 		State:            rmn.DryRunBuildInProgress,
 		RunID:            runID,
 		NamespaceMapping: mapping,
-		Message:          "waiting on the test volumes and the kube object restore",
+		Message:          "waiting on the kube object restore",
 		Requeue:          false,
 	}, nil
-}
-
-// HandOff gives the storage snapshots to the test namespaces and removes the
-// dry-run Velero requests, so that the test copy survives the cluster being
-// returned to Secondary. It runs on revert, on promotion to a real failover,
-// and from the VRG delete path, and tolerates a run that only got part way.
-//
-// TODO(phase 5).
-func HandOff(_ context.Context, _ Input) error {
-	return nil
 }
 
 // sourceNamespaces are the namespaces the test copy mirrors. The scope is

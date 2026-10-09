@@ -1398,6 +1398,16 @@ func (v *VRGInstance) processForDeletion() ctrl.Result {
 		}
 	}
 
+	// Hand the dry run's storage snapshots to the test namespaces before this
+	// VRG goes away. Without this the source snapshot contents are deleted
+	// still carrying a Delete policy, taking the storage behind the test
+	// volumes with them.
+	if err := v.dryRunHandOff(); err != nil {
+		v.log.Info("Requeuing as the dry run hand-off failed", "error", err)
+
+		return ctrl.Result{Requeue: true}
+	}
+
 	result := ctrl.Result{}
 	if err := v.kubeObjectsProtectionDelete(&result); err != nil {
 		v.log.Info("Kube objects protection deletion failed", "error", err)
