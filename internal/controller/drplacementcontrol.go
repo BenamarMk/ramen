@@ -1890,6 +1890,10 @@ func (d *DRPCInstance) updateVRGOptionalFields(vrg, vrgFromView *rmn.VolumeRepli
 	// Inject static IP translation spec for secondary VRG.
 	// Reads primary VRG's discovery status and maps to target IPs from DRPC spec.
 	d.updateVRGStaticIPTranslationSpec(vrg, homeCluster)
+	// A test failover shapes the VRG of the cluster it promoted itself, since
+	// spec.action no longer supplies the action the managed cluster gates on.
+	// No-op for every other cluster, so the source is never touched.
+	d.setVRGDryRunFields(vrg, homeCluster)
 }
 
 // setVRGAnnotations sets all VRG annotations from DRPC
