@@ -6,6 +6,7 @@ package controllers
 import (
 	"strings"
 	"testing"
+	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -248,5 +249,111 @@ func TestSetVRGDryRunFieldsIsInertWithoutARun(t *testing.T) {
 
 	if vrg.Spec.DryRun || vrg.Spec.Action != rmn.VRGActionRelocate {
 		t.Errorf("VRG modified with no run recorded: dryRun=%v action=%q", vrg.Spec.DryRun, vrg.Spec.Action)
+	}
+}
+
+func TestMirrorBringsTheTestClusterReportToTheHub(t *testing.T) {
+	// The managed cluster's log is not somewhere a DRPC user looks, so what
+	// the test cluster says has to reach the hub.
+	d := dryRunInstance("", "")
+	started := metav1.NewTime(time.Now())
+	d.instance.Status.DryRun.StartTime = &started
+
+	d.mirrorDryRunStatus(&rmn.VolumeReplicationGroup{
+		Status: rmn.VolumeReplicationGroupStatus{
+			DryRun: &rmn.DryRunStatus{
+				State:            rmn.DryRunBuildInProgress,
+				Message:          "waiting for test PVC db",
+				NamespaceMapping: map[string]string{"workload1": "workload1-test-abc"},
+			},
+		},
+	})
+
+	got := d.instance.Status.DryRun
+	if got.State != rmn.DryRunBuildInProgress {
+		t.Errorf("state %q not mirrored", got.State)
+	}
+
+	if got.Message != "waiting for test PVC db" {
+		t.Errorf("message %q not mirrored verbatim", got.Message)
+	}
+
+	if got.NamespaceMapping["workload1"] != "workload1-test-abc" {
+		t.Errorf("namespace mapping not mirrored: %v", got.NamespaceMapping)
+	}
+}
+
+func TestMirrorFlagsARunThatHasOutlivedItsBudget(t *testing.T) {
+	// A run holds the peer Primary and replication stopped for as long as it
+	// lasts, and nothing bounds that. The reason alone reads the same at
+	// thirty seconds as at three hours, so the duration has to be said.
+	d := dryRunInstance("", "")
+	started := metav1.NewTime(time.Now().Add(-90 * time.Minute))
+	d.instance.Status.DryRun.StartTime = &started
+
+	d.mirrorDryRunStatus(&rmn.VolumeReplicationGroup{
+		Status: rmn.VolumeReplicationGroupStatus{
+			DryRun: &rmn.DryRunStatus{
+				State:   rmn.DryRunBuildInProgress,
+				Message: "waiting for test PVC db",
+			},
+		},
+	})
+
+	message := d.instance.Status.DryRun.Message
+	if !strings.Contains(message, "longer than") {
+		t.Errorf("an hour-and-a-half old run is not flagged: %s", message)
+	}
+
+	// The underlying reason must survive: it is what someone acts on.
+	if !strings.Contains(message, "waiting for test PVC db") {
+		t.Errorf("the reason was lost: %s", message)
+	}
+}
+
+func TestMirrorDoesNotFlagACompletedRun(t *testing.T) {
+	// How long it took stops being interesting once the copy is up.
+	d := dryRunInstance("", "")
+	started := metav1.NewTime(time.Now().Add(-90 * time.Minute))
+	d.instance.Status.DryRun.StartTime = &started
+
+	d.mirrorDryRunStatus(&rmn.VolumeReplicationGroup{
+		Status: rmn.VolumeReplicationGroupStatus{
+			DryRun: &rmn.DryRunStatus{State: rmn.DryRunBuildCompleted},
+		},
+	})
+
+	if strings.Contains(d.instance.Status.DryRun.Message, "longer than") {
+		t.Errorf("a completed run was flagged as overdue: %s", d.instance.Status.DryRun.Message)
+	}
+}
+
+func TestDryRunLeavesTheRealWorkloadsConditionsAlone(t *testing.T) {
+	// Available and Protected describe the real action and the real
+	// workload, neither of which a test failover changes. Reporting a stall
+	// through Available would tell a user their DR is broken when it is not.
+	d := dryRunInstance("", "")
+	d.instance.Status.Conditions = []metav1.Condition{
+		{Type: rmn.ConditionAvailable, Status: metav1.ConditionTrue, Reason: "Completed"},
+		{Type: rmn.ConditionProtected, Status: metav1.ConditionTrue, Reason: "Protected"},
+	}
+
+	started := metav1.NewTime(time.Now().Add(-90 * time.Minute))
+	d.instance.Status.DryRun.StartTime = &started
+
+	d.mirrorDryRunStatus(&rmn.VolumeReplicationGroup{
+		Status: rmn.VolumeReplicationGroupStatus{
+			DryRun: &rmn.DryRunStatus{
+				State:   rmn.DryRunBuildInProgress,
+				Message: "stalled",
+			},
+		},
+	})
+
+	for _, condition := range d.instance.Status.Conditions {
+		if condition.Status != metav1.ConditionTrue {
+			t.Errorf("condition %s was changed to %s by a stalled dry run",
+				condition.Type, condition.Status)
+		}
 	}
 }

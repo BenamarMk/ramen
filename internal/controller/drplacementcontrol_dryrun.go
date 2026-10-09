@@ -5,6 +5,7 @@ package controllers
 
 import (
 	"fmt"
+	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -41,6 +42,16 @@ import (
 //	                                                absent
 
 const dryRunConditionReason = "DryRunTestFailover"
+
+// dryRunBudget is how long building a test copy is expected to take: promote
+// the test cluster, restore and promote its PVCs, restore the kube objects,
+// then hand the snapshots over and demote.
+//
+// It is an expectation, not a limit. There is no timeout by design, so
+// nothing acts on this -- but a run that exceeds it has almost certainly
+// stopped making progress, and with no failure state to raise, saying so is
+// the only signal an operator gets.
+const dryRunBudget = 5 * time.Minute
 
 // dryRunPhase reads the lifecycle phase from the DRPC. An empty return means
 // no dry run is in progress.
@@ -397,16 +408,39 @@ func (d *DRPCInstance) dryRunReadyToFailover() bool {
 // timeout and no failure state the message is the only signal a stalled run
 // gives.
 func (d *DRPCInstance) mirrorDryRunStatus(vrg *rmn.VolumeReplicationGroup) {
-	if vrg.Status.DryRun == nil || d.instance.Status.DryRun == nil {
+	status := d.instance.Status.DryRun
+	if vrg.Status.DryRun == nil || status == nil {
 		return
 	}
 
-	d.instance.Status.DryRun.State = vrg.Status.DryRun.State
-	d.instance.Status.DryRun.Message = vrg.Status.DryRun.Message
+	status.State = vrg.Status.DryRun.State
+	status.Message = d.dryRunMessage(vrg.Status.DryRun.Message)
 
 	if len(vrg.Status.DryRun.NamespaceMapping) > 0 {
-		d.instance.Status.DryRun.NamespaceMapping = vrg.Status.DryRun.NamespaceMapping
+		status.NamespaceMapping = vrg.Status.DryRun.NamespaceMapping
 	}
+}
+
+// dryRunMessage is what the test cluster reported, with how long the run has
+// been going if that has become the more interesting fact.
+//
+// A run holds the peer Primary and replication stopped for as long as it
+// lasts. Nothing bounds that, so an operator has to be told when a run has
+// outlived the time it should have taken -- the reason alone reads the same
+// at thirty seconds as at three hours.
+func (d *DRPCInstance) dryRunMessage(reason string) string {
+	status := d.instance.Status.DryRun
+	if status == nil || status.StartTime == nil || status.State == rmn.DryRunBuildCompleted {
+		return reason
+	}
+
+	elapsed := time.Since(status.StartTime.Time)
+	if elapsed <= dryRunBudget {
+		return reason
+	}
+
+	return fmt.Sprintf("building for %s, longer than the %s this should take: %s",
+		elapsed.Round(time.Second), dryRunBudget, reason)
 }
 
 // setVRGDryRunFields forces the dry-run shape onto the VRG of the cluster a
