@@ -127,16 +127,3 @@ func TestReconcileStallsRatherThanFailingOnAnIneligibleWorkload(t *testing.T) {
 		t.Error("a stalled run must ask to be called again")
 	}
 }
-
-func TestReconcileNeverReportsCompletedYet(t *testing.T) {
-	// Phases 4 to 6 build the copy. Until they land nothing may claim the
-	// copy is ready, or the hub would revert over a half-built test.
-	out, err := dryrun.Reconcile(context.Background(), testInput(t, []string{"workload1"}, "db"))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if out.State == rmn.DryRunBuildCompleted {
-		t.Error("reported Completed with nothing built")
-	}
-}

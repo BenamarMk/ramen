@@ -11,6 +11,7 @@ import (
 
 	ramendrv1alpha1 "github.com/ramendr/ramen/api/v1alpha1"
 	"github.com/ramendr/ramen/internal/controller/dryrun"
+	"github.com/ramendr/ramen/internal/controller/kubeobjects"
 )
 
 // This is the only seam between the VRG reconcile and the test failover. The
@@ -80,19 +81,6 @@ func (v *VRGInstance) dryRunInput() (dryrun.Input, error) {
 		return dryrun.Input{}, err
 	}
 
-	profiles := make([]dryrun.S3Profile, 0, len(v.s3StoreAccessors))
-
-	for _, accessor := range v.s3StoreAccessors {
-		profiles = append(profiles, dryrun.S3Profile{
-			Name:           accessor.S3ProfileName,
-			Endpoint:       accessor.S3CompatibleEndpoint,
-			Bucket:         accessor.S3Bucket,
-			Region:         accessor.S3Region,
-			SecretKeyRef:   accessor.VeleroNamespaceSecretKeyRef,
-			CACertificates: accessor.CACertificates,
-		})
-	}
-
 	return dryrun.Input{
 		Client:          v.reconciler.Client,
 		APIReader:       v.reconciler.APIReader,
@@ -102,7 +90,7 @@ func (v *VRGInstance) dryRunInput() (dryrun.Input, error) {
 		RecipeElements:  v.recipeElements,
 		VolRepPVCs:      v.volRepPVCs,
 		CephFSPVCs:      cephFSPVCs,
-		S3Profiles:      profiles,
+		Capture:         v.dryRunCapture(),
 		KubeObjects:     v.reconciler.kubeObjects,
 		VeleroNamespace: v.veleroNamespaceName(),
 	}, nil
@@ -186,4 +174,49 @@ func (v *VRGInstance) hadDryRun() bool {
 	_, present := v.instance.GetAnnotations()[ramendrv1alpha1.DryRunAnnotation]
 
 	return present
+}
+
+// dryRunCapture locates the kube objects capture to restore the test copy
+// from: the same one a real failover would use.
+//
+// Which capture that is lives in the source VRG in S3, and reading it needs
+// the object store plumbing this package owns, so it is resolved here rather
+// than in the dry-run package. Returning nil is a reason for the run to wait,
+// not to fail -- the store may simply not be reachable yet.
+func (v *VRGInstance) dryRunCapture() *dryrun.Capture {
+	for _, accessor := range v.s3StoreAccessors {
+		sourceVRG, err := v.getVRGFromS3Profile(accessor.S3ProfileName)
+		if err != nil {
+			v.log.Info("Dry run could not read the source VRG",
+				"profile", accessor.S3ProfileName, "error", err)
+
+			continue
+		}
+
+		capture := sourceVRG.Status.KubeObjectProtection.CaptureToRecoverFrom
+		if capture == nil {
+			continue
+		}
+
+		// Both names come from the shared helper in package kubeobjects, so
+		// what this side looks for cannot drift from what the capture wrote.
+		path, _, namePrefix := kubeobjects.CapturePathNamesAndNamePrefix(
+			s3PathNamePrefix(v.instance.Namespace, v.instance.Name),
+			v.instance.Namespace, v.instance.Name, capture.Number, v.reconciler.kubeObjects)
+
+		return &dryrun.Capture{
+			S3Profile: dryrun.S3Profile{
+				Name:           accessor.S3ProfileName,
+				Endpoint:       accessor.S3CompatibleEndpoint,
+				Bucket:         accessor.S3Bucket,
+				Region:         accessor.S3Region,
+				SecretKeyRef:   accessor.VeleroNamespaceSecretKeyRef,
+				CACertificates: accessor.CACertificates,
+			},
+			Path:       path,
+			NamePrefix: namePrefix,
+		}
+	}
+
+	return nil
 }

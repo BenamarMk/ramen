@@ -67,14 +67,30 @@ type Input struct {
 	// in rather than recomputed here; see Eligible.
 	CephFSPVCs []string
 
-	// S3Profiles are the stores holding the captures to restore from.
-	S3Profiles []S3Profile
+	// Capture locates the kube objects capture to restore from. Nil until the
+	// adapter has read the source VRG out of S3, which is a reason to wait
+	// rather than a reason to fail.
+	Capture *Capture
 
 	// KubeObjects creates the Velero requests for the restore.
 	KubeObjects kubeobjects.RequestsManager
 
 	// VeleroNamespace is where those requests are created.
 	VeleroNamespace string
+}
+
+// Capture is the kube objects capture a test copy is restored from: the same
+// one a real failover would use, read from the same store.
+type Capture struct {
+	S3Profile S3Profile
+
+	// Path is the S3 key prefix the capture was written under.
+	Path string
+
+	// NamePrefix is the prefix shared by the capture's request names. Both
+	// come from the shared helper in package kubeobjects, so the names this
+	// side looks for cannot drift from the names the capture side wrote.
+	NamePrefix string
 }
 
 // S3Profile is the slice of a store accessor this package needs. It is a local
@@ -162,12 +178,27 @@ func Reconcile(ctx context.Context, in Input) (Output, error) {
 		return out, nil
 	}
 
-	// TODO(phase 6): restore the kube objects into the test namespaces.
+	pending, err = restoreKubeObjects(ctx, in, runID, mapping)
+	if err != nil {
+		out := inProgress(in, runID, err.Error())
+		out.NamespaceMapping = mapping
+
+		return out, nil
+	}
+
+	if len(pending) > 0 {
+		out := inProgress(in, runID, strings.Join(pending, "; "))
+		out.NamespaceMapping = mapping
+
+		return out, nil
+	}
+
+	in.Log.Info("Dry run test copy is ready", "runID", runID, "namespaces", mapping)
+
 	return Output{
-		State:            rmn.DryRunBuildInProgress,
+		State:            rmn.DryRunBuildCompleted,
 		RunID:            runID,
 		NamespaceMapping: mapping,
-		Message:          "waiting on the kube object restore",
 		Requeue:          false,
 	}, nil
 }
