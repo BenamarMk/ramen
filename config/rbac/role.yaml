@@ -39,6 +39,16 @@ rules:
 - apiGroups:
   - ""
   resources:
+  - limitranges
+  - resourcequotas
+  verbs:
+  - create
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
   - namespaces
   verbs:
   - create
@@ -311,6 +321,15 @@ rules:
   - update
   - watch
 - apiGroups:
+  - networking.k8s.io
+  resources:
+  - networkpolicies
+  verbs:
+  - create
+  - get
+  - list
+  - watch
+- apiGroups:
   - policy.open-cluster-management.io
   resources:
   - placementbindings
@@ -379,6 +398,18 @@ rules:
   - list
   - watch
 - apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
+  - rolebindings
+  - roles
+  verbs:
+  - bind
+  - create
+  - escalate
+  - get
+  - list
+  - watch
+- apiGroups:
   - replication.storage.openshift.io
   resources:
   - volumegroupreplicationclasses
@@ -407,6 +438,18 @@ rules:
   verbs:
   - get
   - list
+  - watch
+- apiGroups:
+  - snapshot.storage.k8s.io
+  resources:
+  - volumesnapshotcontents
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
   - watch
 - apiGroups:
   - snapshot.storage.k8s.io

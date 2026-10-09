@@ -452,6 +452,16 @@ func filterPVC(reader client.Reader, pvc *corev1.PersistentVolumeClaim, log logr
 // +kubebuilder:rbac:groups="kubevirt.io",resources=virtualmachines,verbs=get;list;watch;patch;update;delete
 // +kubebuilder:rbac:groups="kubevirt.io",resources=virtualmachineinstances,verbs=get;list;watch
 // +kubebuilder:rbac:groups="cdi.kubevirt.io",resources=datavolumes,verbs=get;list;watch
+// Test failover builds a copy of the workload in namespaces Ramen generates,
+// reproducing the protected namespace's policy posture so the copy behaves
+// like the real thing. escalate and bind are needed to copy Roles and
+// RoleBindings whose rules exceed the operator's own permissions.
+//nolint:lll
+// +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch;create
+// +kubebuilder:rbac:groups="",resources=resourcequotas;limitranges,verbs=get;list;watch;create
+// +kubebuilder:rbac:groups="networking.k8s.io",resources=networkpolicies,verbs=get;list;watch;create
+// +kubebuilder:rbac:groups="rbac.authorization.k8s.io",resources=roles;rolebindings,verbs=get;list;watch;create;escalate;bind
+// +kubebuilder:rbac:groups="snapshot.storage.k8s.io",resources=volumesnapshotcontents,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.

@@ -124,7 +124,7 @@ func inProgress(in Input, runID, reason string) Output {
 //
 // It never reports failure. Anything it cannot do yet comes back InProgress
 // with a reason.
-func Reconcile(_ context.Context, in Input) (Output, error) {
+func Reconcile(ctx context.Context, in Input) (Output, error) {
 	runID := RunID(in.DRPCUID)
 
 	if reason := Eligible(in); reason != "" {
@@ -136,8 +136,13 @@ func Reconcile(_ context.Context, in Input) (Output, error) {
 		return inProgress(in, runID, err.Error()), nil
 	}
 
-	// TODO(phase 4): create the test namespaces and copy the source
-	// namespaces' policy objects into them.
+	if err := ensureTestNamespaces(ctx, in, runID, mapping); err != nil {
+		out := inProgress(in, runID, err.Error())
+		out.NamespaceMapping = mapping
+
+		return out, nil
+	}
+
 	// TODO(phase 5): hand each dry-run snapshot to its test namespace and
 	// create the test PVC there.
 	// TODO(phase 6): restore the kube objects into the test namespaces.
@@ -145,7 +150,7 @@ func Reconcile(_ context.Context, in Input) (Output, error) {
 		State:            rmn.DryRunBuildInProgress,
 		RunID:            runID,
 		NamespaceMapping: mapping,
-		Message:          "building the test copy is not yet implemented",
+		Message:          "waiting on the test volumes and the kube object restore",
 		Requeue:          false,
 	}, nil
 }
