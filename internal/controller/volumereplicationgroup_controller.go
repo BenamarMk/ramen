@@ -1534,6 +1534,18 @@ func (v *VRGInstance) processAsPrimary() ctrl.Result {
 		return v.updateVRGConditionsAndStatus(v.result)
 	}
 
+	// A test failover builds a copy of the application in generated test
+	// namespaces instead of restoring it here. This branch replaces the
+	// in-place restore rather than running before it, which is what keeps the
+	// real application off the test cluster: only its PVCs and PVs are
+	// restored, and only so their volumes can be promoted and snapshotted.
+	//
+	// KubeObjectsReady is deliberately left unset, so a later real failover
+	// still performs its own restore.
+	if v.instance.Spec.DryRun {
+		return v.reconcileDryRun()
+	}
+
 	if v.shouldRestoreKubeObjects() {
 		err := v.kubeObjectsRecover(&v.result)
 		if err != nil {
