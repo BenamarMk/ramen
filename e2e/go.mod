@@ -82,3 +82,8 @@ require (
 	sigs.k8s.io/randfill v1.0.0 // indirect
 	sigs.k8s.io/structured-merge-diff/v4 v4.6.0 // indirect
 )
+
+// The test failover e2e exercises API types that are not in a released
+// api module yet. Drop this once github.com/ramendr/ramen/api has been
+// bumped to a version containing DryRunStatus and the dry-run annotation.
+replace github.com/ramendr/ramen/api => ../api
