@@ -134,7 +134,12 @@ const (
 	ProgressionDeleting                            = ProgressionStatus("Deleting")
 	ProgressionDeleted                             = ProgressionStatus("Deleted")
 	ProgressionActionPaused                        = ProgressionStatus("Paused")
-	ProgressionTestingFailover                     = ProgressionStatus("TestingFailover")
+
+	// ProgressionTestingFailover is deprecated and no longer set. A test
+	// failover is tracked by the dry-run annotation and status.dryRun, not by
+	// progression, which belongs to the real action. Retained so that anything
+	// reading DRPC status does not break.
+	ProgressionTestingFailover = ProgressionStatus("TestingFailover")
 )
 
 // DRPlacementControlSpec defines the desired state of DRPlacementControl
@@ -279,6 +284,11 @@ type DRPlacementControlStatus struct {
 	// lastKubeObjectProtectionTime is the time of the most recent successful kube object protection
 	//+optional
 	LastKubeObjectProtectionTime *metav1.Time `json:"lastKubeObjectProtectionTime,omitempty"`
+
+	// dryRun reports the test failover, mirrored from the VRG on the cluster
+	// building the test copy. It is where a user finds the test namespaces.
+	//+optional
+	DryRun *DryRunStatus `json:"dryRun,omitempty"`
 }
 
 // +kubebuilder:object:root=true

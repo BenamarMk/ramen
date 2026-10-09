@@ -479,6 +479,11 @@ type VolumeReplicationGroupStatus struct {
 
 	//+optional
 	StaticIPDiscoveryStatus *StaticIPDiscoveryStatus `json:"staticIPDiscovery,omitempty"`
+
+	// dryRun reports progress building a test copy of this workload in
+	// generated test namespaces. Set only while spec.dryRun is in effect.
+	//+optional
+	DryRun *DryRunStatus `json:"dryRun,omitempty"`
 }
 
 // +kubebuilder:object:root=true

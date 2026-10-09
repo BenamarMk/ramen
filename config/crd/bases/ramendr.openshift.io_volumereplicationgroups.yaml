@@ -1859,6 +1859,64 @@ spec:
                   - type
                   type: object
                 type: array
+              dryRun:
+                description: |-
+                  dryRun reports progress building a test copy of this workload in
+                  generated test namespaces. Set only while spec.dryRun is in effect.
+                properties:
+                  actionAtStart:
+                    description: |-
+                      actionAtStart and failoverClusterAtStart record the spec the run began
+                      against. A change in either is a real DR request, which pre-empts the
+                      test. Both are watched because action alone is not enough: a DRPC
+                      already holding Failover from an earlier real failover shows no change
+                      when the user retargets failoverCluster at a genuine disaster.
+                      Set on the DRPC only.
+                    enum:
+                    - Failover
+                    - Relocate
+                    type: string
+                  completionTime:
+                    format: date-time
+                    type: string
+                  failoverClusterAtStart:
+                    type: string
+                  message:
+                    description: |-
+                      message explains why a run that is still InProgress has not advanced.
+                      With no timeout and no failure state, this is the only signal a stalled
+                      run gives, so it must name the resource being waited on.
+                    type: string
+                  namespaceMapping:
+                    additionalProperties:
+                      type: string
+                    description: |-
+                      namespaceMapping maps each protected namespace to the test namespace its
+                      contents were restored into. This is where a user finds the test copy.
+                    type: object
+                  runID:
+                    description: |-
+                      runID identifies this test run and is the suffix of every test namespace
+                      it creates.
+                    type: string
+                  startTime:
+                    format: date-time
+                    type: string
+                  state:
+                    description: DryRunState is how far the cluster building the test
+                      copy has got.
+                    enum:
+                    - InProgress
+                    - Completed
+                    type: string
+                  targetCluster:
+                    description: |-
+                      targetCluster is the peer promoted to build the test copy. It is derived
+                      once when the run starts and read back thereafter, so the run cannot
+                      retarget itself if cluster roles shift underneath it.
+                      Set on the DRPC only.
+                    type: string
+                type: object
               finalSyncComplete:
                 type: boolean
               kubeObjectProtection:
