@@ -42,15 +42,6 @@ const (
 	// Annotation for application namespace on the managed cluster
 	DRPCAppNamespace = "drplacementcontrol.ramendr.openshift.io/app-namespace"
 
-	// Annotation to mark test failover (dry-run) mode
-	DRPCTestFailoverDryRunAnnotation = "drplacementcontrol.ramendr.openshift.io/test-failover-dryrun"
-
-	// DRPCTestFailoverDryRunAnnotationValueTrue is the value set in the test failover annotation
-	DRPCTestFailoverDryRunAnnotationValueTrue = "true"
-
-	// Annotation for the last action performed on the DRPC
-	DRPCLastAction = "drplacementcontrol.ramendr.openshift.io/last-action"
-
 	// DRPCNetworkMappingAnnotation references a ConfigMap (by name, same namespace) that
 	// holds the bidirectional cluster-pair network subnet mappings for VM static-IP translation.
 	// Value is the ConfigMap name; namespace defaults to the DRPC namespace.
@@ -88,7 +79,6 @@ type DRPCInstance struct {
 	ramenConfig          *rmn.RamenConfig
 	mwu                  rmnutil.MWUtil
 	drType               DRType
-	requeueAfter         time.Duration
 	networkMappingRules  *NetworkMappingRules
 }
 
@@ -127,65 +117,21 @@ func (d *DRPCInstance) startProcessing() bool {
 func (d *DRPCInstance) processPlacement() (bool, error) {
 	d.log.Info("Process DRPC Placement", "DRAction", d.instance.Spec.Action)
 
-	// Handle dryRun flow (annotation management and cleanup)
-	shouldContinue, err := d.processTestFailoverFlowIfEnabled()
-	if err != nil {
-		return false, err
-	}
-
-	if !shouldContinue {
-		return false, nil
-	}
-
 	return d.executeAction()
 }
 
-// processTestFailoverFlowIfEnabled is the entry point for test failover lifecycle management.
-// It validates dryRun configuration, adds annotation when entering test failover,
-// and routes to promotion/revert handlers when exiting.
-// Returns true if processing should continue, false if a requeue is needed.
+// executeAction dispatches to the dry-run test failover, or to the real DR
+// action. A dry run is a mode of its own: spec.action is neither read to decide
+// what to do nor written, so whatever it holds is left alone.
 //
-//nolint:cyclop,gocognit,gocyclo
-func (d *DRPCInstance) processTestFailoverFlowIfEnabled() (bool, error) {
-	// Validate dryRun configuration
-	if d.instance.Spec.DryRun {
-		if d.instance.Spec.Action != rmn.ActionFailover {
-			err := fmt.Errorf("dryRun is enabled but action is not failover")
-			d.reconciler.recordFailure(d.ctx, d.instance, d.userPlacement, "ValidationFailed", err.Error(), d.log)
-
-			return false, err
-		}
-	}
-	// Add dry-run annotation when entering test failover
-	// Validate failover cluster is different from current deployment cluster
-	lastAppCluster := d.instance.GetAnnotations()[LastAppDeploymentCluster]
-	if d.instance.Spec.DryRun &&
-		d.instance.Spec.Action == rmn.ActionFailover &&
-		d.instance.Spec.FailoverCluster != "" {
-		// Check if annotation already exists to avoid unnecessary updates
-		if !rmnutil.HasAnnotation(d.instance, DRPCTestFailoverDryRunAnnotation) {
-			// Add test failover annotation
-			// Note: We don't update last-action annotations during dryRun,
-			// so they naturally preserve the pre-test state for revert validation
-			rmnutil.AddAnnotation(d.instance, DRPCTestFailoverDryRunAnnotation, "true")
-
-			if err := d.reconciler.Update(d.ctx, d.instance); err != nil {
-				return false, fmt.Errorf("failed to add test failover annotation: %w", err)
-			}
-
-			d.log.Info("Initiated test failover",
-				"last-action", d.instance.GetAnnotations()[DRPCLastAction],
-				"last-app-cluster", lastAppCluster)
-
-			// Requeue to pick up the persisted annotation
-			return false, nil
-		}
-	}
-
-	return true, nil
-}
-
+// The dryRunFinished guard matters. Without it a DRPC left with dryRun true
+// after a completed test could never perform a real failover, because
+// RunDryRunFailover would keep being called with nothing left to do.
 func (d *DRPCInstance) executeAction() (bool, error) {
+	if d.instance.Spec.DryRun && !d.dryRunFinished() {
+		return d.RunDryRunFailover()
+	}
+
 	switch d.instance.Spec.Action {
 	case rmn.ActionFailover:
 		return d.RunFailover()
@@ -225,20 +171,7 @@ func (d *DRPCInstance) RunInitialDeployment() (bool, error) {
 		return d.ensureActionTransition(homeCluster)
 	}
 
-	// Check for test failover abort BEFORE checking placement update
-	// During abort, placement is still on failoverCluster, so isUserPlRuleUpdated would be false
-	// This would incorrectly trigger startDeploying instead of cleanup
-	if deployed && rmnutil.HasAnnotation(d.instance, DRPCTestFailoverDryRunAnnotation) {
-		d.log.Info("Test failover revert detected, initiate cleanup")
-
-		err := d.reconciler.switchClusterDecisionRetainFailover(d.ctx, d.userPlacement, homeCluster)
-		if err != nil {
-			return !done, err
-		}
-
-		addOrUpdateCondition(&d.instance.Status.Conditions, rmn.ConditionPeerReady, d.instance.Generation,
-			metav1.ConditionFalse, rmn.ReasonCleaning, "Not Ready")
-	} else if !deployed || !d.isUserPlRuleUpdated(homeCluster) {
+	if !deployed || !d.isUserPlRuleUpdated(homeCluster) {
 		// Ensure that initial deployment is complete
 		d.setStatusInitiating()
 
@@ -476,28 +409,11 @@ func (d *DRPCInstance) RunFailover() (bool, error) {
 		addOrUpdateCondition(&d.instance.Status.Conditions, rmn.ConditionAvailable, d.instance.Generation,
 			metav1.ConditionTrue, string(d.instance.Status.Phase), "Completed")
 
-		if d.instance.Spec.DryRun {
-			d.setProgression(rmn.ProgressionTestingFailover)
-
-			if err := d.ensurePlacement(failoverCluster); err != nil {
-				return !done, err
-			}
-
-			// Requeue after 1 minute to continue monitoring test failover
-			d.requeueAfter = time.Minute
-
-			return !done, nil
-		}
-
 		return d.ensureActionTransition(failoverCluster)
 	} else if yes, err := d.mwExistsAndPlacementUpdated(failoverCluster); yes || err != nil {
 		// We have to wait for the VRG to appear on the failoverCluster or
 		// in case of an error, try again later
 		return !done, err
-	}
-	// For dry-run: block until workload is protected and replication is current.
-	if d.instance.Spec.DryRun && !d.dryRunReadyToFailover() {
-		return !done, nil
 	}
 
 	d.setStatusInitiating()
@@ -523,12 +439,6 @@ func (d *DRPCInstance) isProtected() bool {
 		metav1.ConditionFalse, string(d.instance.Status.Phase), msg)
 
 	return false
-}
-
-// dryRunReadyToFailover returns true when the workload is protected and replication is current,
-// meaning a dry-run test failover can safely proceed.
-func (d *DRPCInstance) dryRunReadyToFailover() bool {
-	return d.isProtected() && !d.isGroupSyncLagging()
 }
 
 // isGroupSyncLagging reports true when the most recent group sync is older than 3× the DRPolicy scheduling interval,
@@ -1992,7 +1902,7 @@ func (d *DRPCInstance) setVRGAnnotations(vrg *rmn.VolumeReplicationGroup, homeCl
 		rmnutil.IsSubmarinerEnabledAnnotation: d.instance.GetAnnotations()[rmnutil.IsSubmarinerEnabledAnnotation],
 		rmnutil.UseVolSyncAnnotation:          d.instance.GetAnnotations()[rmnutil.UseVolSyncAnnotation],
 		rmnutil.EnableDiffAnnotation:          d.instance.GetAnnotations()[rmnutil.EnableDiffAnnotation],
-		DRPCTestFailoverDryRunAnnotation:      d.instance.GetAnnotations()[DRPCTestFailoverDryRunAnnotation],
+		rmn.DryRunAnnotation:                  d.instance.GetAnnotations()[rmn.DryRunAnnotation],
 	}
 
 	// Propagate global VGR label to VRG for consensus checks.
@@ -2051,11 +1961,6 @@ func (d *DRPCInstance) ensurePlacement(homeCluster string) error {
 		added = rmnutil.AddAnnotation(d.instance, LastAppDeploymentCluster, homeCluster)
 	}
 
-	if !d.instance.Spec.DryRun {
-		// Also update last-action annotation to track the current action
-		added = rmnutil.AddAnnotation(d.instance, DRPCLastAction, string(d.instance.Spec.Action)) || added
-	}
-
 	if added {
 		if err := d.reconciler.Update(d.ctx, d.instance); err != nil {
 			return err
@@ -2086,24 +1991,11 @@ func vrgAction(drpcAction rmn.DRAction) rmn.VRGAction {
 
 func (d *DRPCInstance) setVRGAction(vrg *rmn.VolumeReplicationGroup) {
 	action := vrgAction(d.instance.Spec.Action)
-
-	// CRITICAL: Always update DryRun if VRG action is currently Failover
-	// This ensures cleanup happens even when user removes DRPC action
-	// VRG controller needs VRG.Spec.DryRun=false to trigger snapshot cleanup
-	// Also update DryRun when VRG has dryRun set (e.g., from test failover)
-	// to ensure it's synced with DRPC spec when transitioning states
-	if vrg.Spec.Action == rmn.VRGActionFailover || vrg.Spec.DryRun {
-		vrg.Spec.DryRun = d.instance.Spec.DryRun
-	}
-
 	if action == "" {
 		return
 	}
 
 	vrg.Spec.Action = action
-	if action == rmn.VRGActionFailover {
-		vrg.Spec.DryRun = d.instance.Spec.DryRun
-	}
 }
 
 func (d *DRPCInstance) newVRG(
@@ -2369,17 +2261,6 @@ func (d *DRPCInstance) cleanupSecondaries(clusterToSkip string) error {
 	addOrUpdateCondition(&d.instance.Status.Conditions, rmn.ConditionPeerReady, d.instance.Generation,
 		metav1.ConditionTrue, rmn.ReasonSuccess, "Ready")
 
-	// FIXME
-	// If test failover annotation exists, remove it now that cleanup is complete
-	if rmnutil.HasAnnotation(d.instance, DRPCTestFailoverDryRunAnnotation) {
-		delete(d.instance.Annotations, DRPCTestFailoverDryRunAnnotation)
-		d.log.Info("Test failover cleanup complete, removed annotation")
-
-		if err := d.reconciler.Update(d.ctx, d.instance); err != nil {
-			return fmt.Errorf("failed to remove test failover annotation: %w", err)
-		}
-	}
-
 	return nil
 }
 
@@ -2608,10 +2489,6 @@ func (d *DRPCInstance) updateVRGState(clusterName string, state rmn.ReplicationS
 		// Turn off the final sync flags
 		vrg.Spec.PrepareForFinalSync = false
 		vrg.Spec.RunFinalSync = false
-
-		// if vrg.Annotations[DRPCTestFailoverDryRunAnnotation] == DRPCTestFailoverDryRunAnnotationValueTrue {
-		// 	vrg.Annotations[DRPCTestFailoverDryRunAnnotation] = "false"
-		// }
 	}
 
 	err = d.updateManifestWork(clusterName, vrg)
@@ -2626,8 +2503,7 @@ func (d *DRPCInstance) updateVRGState(clusterName string, state rmn.ReplicationS
 
 func (d *DRPCInstance) isFailoverPromotion(clusterName string) bool {
 	return clusterName == d.instance.Spec.FailoverCluster &&
-		d.instance.Spec.Action == rmn.ActionFailover &&
-		d.instance.Spec.DryRun == false
+		d.instance.Spec.Action == rmn.ActionFailover
 }
 
 func (d *DRPCInstance) updateVRGToPrepareForFinalSync(clusterName string) error {
@@ -3192,15 +3068,6 @@ func (d *DRPCInstance) isSourceVRGForAction(clusterName string) bool {
 	if (spec.PreferredCluster == clusterName && spec.Action == rmn.ActionRelocate) ||
 		(spec.FailoverCluster == clusterName && spec.Action == rmn.ActionFailover) {
 		return true
-	}
-
-	// When action is empty (e.g., after dryRun revert with last-action=""), check LastAppDeploymentCluster.
-	// If the cluster being cleaned up is NOT the LastAppDeploymentCluster (source), it's the target
-	// that needs cleanup, so return true to trigger alternate VRG lookup from the source cluster.
-	if spec.Action == "" {
-		if lastCluster, ok := d.instance.GetAnnotations()[LastAppDeploymentCluster]; ok {
-			return lastCluster != clusterName
-		}
 	}
 
 	return false

@@ -1445,11 +1445,13 @@ func (v *VRGInstance) autoResync(state volrep.ReplicationState) bool {
 		return false
 	}
 
-	// Check test failover annotation FIRST (before action check)
-	// This ensures AutoResync is enabled during test failover and cleanup,
-	// even when action is restored to Relocate during cleanup
-	isTestFailover := v.instance.GetAnnotations()[DRPCTestFailoverDryRunAnnotation] ==
-		DRPCTestFailoverDryRunAnnotationValueTrue
+	// Check the dry-run annotation FIRST (before the action check). A test
+	// failover must auto-resync while it holds this cluster Primary and
+	// through the revert, so replication catches up as soon as the volumes
+	// are demoted. The annotation is terminal at Completed; any phase before
+	// that means a run is still live.
+	dryRunPhase := ramendrv1alpha1.DryRunPhase(v.instance.GetAnnotations()[ramendrv1alpha1.DryRunAnnotation])
+	isTestFailover := dryRunPhase != "" && dryRunPhase != ramendrv1alpha1.DryRunCompleted
 
 	if isTestFailover {
 		v.log.Info("AutoResync enabled for test failover/cleanup",
