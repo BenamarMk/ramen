@@ -40,7 +40,12 @@ func restoreKubeObjects(
 		return nil, err
 	}
 
-	existing, err := captureRequests(ctx, in, runID)
+	captures, err := captureRequests(ctx, in, runID)
+	if err != nil {
+		return nil, err
+	}
+
+	restores, err := restoreRequests(ctx, in, runID)
 	if err != nil {
 		return nil, err
 	}
@@ -56,7 +61,7 @@ func restoreKubeObjects(
 			continue
 		}
 
-		reason, err := restoreGroup(ctx, in, runID, group, spec, mapping, modifier, existing)
+		reason, err := restoreGroup(ctx, in, runID, group, spec, mapping, modifier, captures, restores)
 		if err != nil {
 			return nil, err
 		}
@@ -83,13 +88,37 @@ func captureRequests(ctx context.Context, in Input, runID string) (map[string]ku
 	return kubeobjects.RequestsMapKeyedByName(requests), nil
 }
 
+// restoreRequests are the Velero Restore objects this run has already
+// submitted, read back from the cluster.
+//
+// Reading them back is the only way to learn how a restore is going.
+// Submitting one hands back the object just constructed, which has no status
+// on it yet, so asking that whether the restore finished answers "not yet"
+// forever however long Velero has been done.
+func restoreRequests(ctx context.Context, in Input, runID string) (map[string]kubeobjects.Request, error) {
+	requests, err := in.KubeObjects.RecoverRequestsGet(
+		ctx, in.APIReader, in.VeleroNamespace, RequestLabels(runID))
+	if err != nil {
+		return nil, fmt.Errorf("reading dry run restore requests: %w", err)
+	}
+
+	return kubeobjects.RequestsMapKeyedByName(requests), nil
+}
+
 func restoreGroup(
 	ctx context.Context, in Input, runID string, group int, spec kubeobjects.RecoverSpec,
-	mapping map[string]string, modifier string, existing map[string]kubeobjects.Request,
+	mapping map[string]string, modifier string,
+	captures, restores map[string]kubeobjects.Request,
 ) (string, error) {
 	profile := in.Capture.S3Profile
 	captureName := kubeobjects.CaptureName(in.Capture.NamePrefix, spec.BackupName, profile.Name)
 	restoreName := restoreRequestName(in.VRG.GetName(), runID, group)
+
+	// Already submitted: judge it on what the cluster says, not on what the
+	// submission handed back.
+	if request, submitted := restores[restoreName]; submitted {
+		return restoreProgress(in, restoreName, request), nil
+	}
 
 	// The mapping is what redirects the restore. The spec's includedNamespaces
 	// stay as the source namespaces: those are the keys Velero matches the
@@ -105,7 +134,7 @@ func restoreGroup(
 		profile.Endpoint, profile.Bucket, profile.Region, in.Capture.Path,
 		profile.SecretKeyRef, profile.CACertificates,
 		spec, in.VeleroNamespace,
-		captureName, existing[captureName],
+		captureName, captures[captureName],
 		restoreName,
 		RequestLabels(runID), map[string]string{},
 	)
@@ -114,22 +143,32 @@ func restoreGroup(
 	}
 
 	if request == nil {
+		// Velero restores from a Backup object, so a capture taken on the
+		// other cluster has to be re-presented here first. That is what this
+		// pass asked for.
 		return fmt.Sprintf("waiting for capture %s to be readable", captureName), nil
 	}
 
-	if err := request.Status(in.Log); err != nil {
-		// A restore that is merely in progress is not a problem. One that
-		// failed is not either, in the sense that it must not fail the run:
-		// the reason is surfaced and the run waits for a human, keeping the
-		// evidence rather than tearing it down.
-		if errors.Is(err, kubeobjects.RequestProcessingError{}) {
-			return fmt.Sprintf("restore %s: %s", restoreName, err.Error()), nil
-		}
+	return fmt.Sprintf("restore %s submitted", restoreName), nil
+}
 
-		return fmt.Sprintf("restore %s needs attention: %s", restoreName, err.Error()), nil
+// restoreProgress turns what Velero says about a restore into a reason to keep
+// waiting, or "" when it is done.
+func restoreProgress(in Input, restoreName string, request kubeobjects.Request) string {
+	err := request.Status(in.Log)
+	if err == nil {
+		return ""
 	}
 
-	return "", nil
+	// A restore still running is not a problem. One that failed is not
+	// either, in the sense that it must not fail the run: the reason is
+	// surfaced and the run waits for a human, keeping the evidence rather
+	// than tearing it down.
+	if errors.Is(err, kubeobjects.RequestProcessingError{}) {
+		return fmt.Sprintf("restore %s: %s", restoreName, err.Error())
+	}
+
+	return fmt.Sprintf("restore %s needs attention: %s", restoreName, err.Error())
 }
 
 // restoreRequestName keeps this run's Velero requests out of the production

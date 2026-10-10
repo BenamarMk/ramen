@@ -20,29 +20,58 @@ import (
 	"github.com/ramendr/ramen/internal/controller/util"
 )
 
-// recordingRequests is a RequestsManager that records what the restore asked
-// for, so the test can assert on the request rather than on Velero.
+// recordingRequests models the half of Velero's request lifecycle that
+// matters here: submitting a restore hands back the object just constructed,
+// with no status on it, and the only way to learn how the restore is going is
+// to read it back from the cluster.
+//
+// Getting that wrong is invisible to a mock that reports success from the
+// submission, which is exactly how a stuck restore reached a cluster.
 type recordingRequests struct {
-	created  []kubeobjects.RecoverSpec
-	names    []string
+	created   []kubeobjects.RecoverSpec
+	names     []string
+	submitted map[string]bool
+
+	// complete is what the cluster would say about an already-submitted
+	// restore. A submission never reports this, however finished Velero is.
 	complete bool
 }
 
-type stubRequest struct{}
+func newRecordingRequests(complete bool) *recordingRequests {
+	return &recordingRequests{submitted: map[string]bool{}, complete: complete}
+}
+
+// stubRequest stands in for a Velero object. err is what Status reports:
+// RequestProcessingError while it is not finished, nil once it is.
+type stubRequest struct {
+	name string
+	err  error
+}
 
 func (r stubRequest) Object() client.Object    { return &corev1.ConfigMap{} }
-func (r stubRequest) Name() string             { return "stub" }
+func (r stubRequest) Name() string             { return r.name }
 func (r stubRequest) StartTime() metav1.Time   { return metav1.Now() }
 func (r stubRequest) EndTime() metav1.Time     { return metav1.Now() }
-func (r stubRequest) Status(logr.Logger) error { return nil }
+func (r stubRequest) Status(logr.Logger) error { return r.err }
 func (r stubRequest) Deallocate(context.Context, client.Client, logr.Logger) error {
 	return nil
 }
 
-func (m *recordingRequests) ProtectsPath() string                          { return "velero/backups/" }
-func (m *recordingRequests) RecoversPath() string                          { return "velero/restores/" }
-func (m *recordingRequests) ProtectRequestNew() kubeobjects.ProtectRequest { return stubRequest{} }
-func (m *recordingRequests) RecoverRequestNew() kubeobjects.RecoverRequest { return stubRequest{} }
+type stubRequests struct{ items []kubeobjects.Request }
+
+func (r stubRequests) Count() int                    { return len(r.items) }
+func (r stubRequests) Get(i int) kubeobjects.Request { return r.items[i] }
+
+func (m *recordingRequests) ProtectsPath() string { return "velero/backups/" }
+func (m *recordingRequests) RecoversPath() string { return "velero/restores/" }
+
+func (m *recordingRequests) ProtectRequestNew() kubeobjects.ProtectRequest {
+	return stubRequest{}
+}
+
+func (m *recordingRequests) RecoverRequestNew() kubeobjects.RecoverRequest {
+	return stubRequest{}
+}
 
 func (m *recordingRequests) ProtectRequestCreate(
 	context.Context, client.Client, logr.Logger, string, string, string, string,
@@ -60,26 +89,38 @@ func (m *recordingRequests) RecoverRequestCreate(
 ) (kubeobjects.RecoverRequest, error) {
 	m.created = append(m.created, spec)
 	m.names = append(m.names, recoverName)
+	m.submitted[recoverName] = true
 
-	if !m.complete {
-		// Mirrors Velero's two-step dance: the first pass only asks for the
-		// capture to be made readable.
-		return nil, nil
-	}
-
-	return stubRequest{}, nil
+	// A freshly created Restore has no phase yet, whatever Velero goes on to
+	// do with it.
+	return stubRequest{
+		name: recoverName,
+		err:  kubeobjects.RequestProcessingErrorCreate("restore.status.phase absent"),
+	}, nil
 }
 
 func (m *recordingRequests) ProtectRequestsGet(
 	context.Context, client.Reader, string, map[string]string,
 ) (kubeobjects.Requests, error) {
-	return emptyRequests{}, nil
+	return stubRequests{}, nil
 }
 
+// RecoverRequestsGet is the cluster's view: it knows whether Velero finished.
 func (m *recordingRequests) RecoverRequestsGet(
 	context.Context, client.Reader, string, map[string]string,
 ) (kubeobjects.Requests, error) {
-	return emptyRequests{}, nil
+	items := make([]kubeobjects.Request, 0, len(m.submitted))
+
+	for name := range m.submitted {
+		request := stubRequest{name: name}
+		if !m.complete {
+			request.err = kubeobjects.RequestProcessingErrorCreate("restoreInProgress")
+		}
+
+		items = append(items, request)
+	}
+
+	return stubRequests{items: items}, nil
 }
 
 func (m *recordingRequests) ProtectRequestsDelete(
@@ -100,18 +141,13 @@ func (m *recordingRequests) ProtectBSLsDelete(
 	return nil
 }
 
-type emptyRequests struct{}
-
-func (emptyRequests) Count() int                  { return 0 }
-func (emptyRequests) Get(int) kubeobjects.Request { return nil }
-
 // restoreInput is a workload whose volumes are already in place, so the
 // restore is the only thing left to do.
 func restoreInput(t *testing.T, complete bool) (dryrun.Input, *recordingRequests, client.Client) {
 	t.Helper()
 
 	in, c := volumeInput(t)
-	manager := &recordingRequests{complete: complete}
+	manager := newRecordingRequests(complete)
 
 	in.KubeObjects = manager
 	in.VeleroNamespace = "velero"
@@ -284,8 +320,16 @@ func TestRestoreDoesNotApplyStaticIPTranslation(t *testing.T) {
 
 func TestRunCompletesOnceEverythingIsRestored(t *testing.T) {
 	in, _, _ := restoreInput(t, true)
+	ctx := context.Background()
 
-	out, err := dryrun.Reconcile(context.Background(), in)
+	// One pass submits the restore; the next reads back what Velero made of
+	// it. A run cannot finish in the pass that submits, because at that point
+	// nothing has been restored yet.
+	if _, err := dryrun.Reconcile(ctx, in); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := dryrun.Reconcile(ctx, in)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -295,11 +339,63 @@ func TestRunCompletesOnceEverythingIsRestored(t *testing.T) {
 	}
 }
 
-func TestRunWaitsWhileTheCaptureIsNotReadableYet(t *testing.T) {
-	// Velero restores from a Backup object, so a capture taken on the other
-	// cluster is re-presented here first. Until that is ready there is
-	// nothing to restore from.
+func TestRunJudgesARestoreByTheClusterNotTheSubmission(t *testing.T) {
+	// Submitting a restore hands back the object just constructed, which has
+	// no status on it however finished Velero is. Trusting that leaves a run
+	// reporting "restore.status.phase absent" forever against a restore that
+	// completed long ago -- which is exactly what reached a cluster.
+	in, manager, _ := restoreInput(t, true)
+	ctx := context.Background()
+
+	if _, err := dryrun.Reconcile(ctx, in); err != nil {
+		t.Fatal(err)
+	}
+
+	submissions := len(manager.created)
+
+	out, err := dryrun.Reconcile(ctx, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if out.State != rmn.DryRunBuildCompleted {
+		t.Errorf("a completed restore was not noticed: %s", out.Message)
+	}
+
+	// And it must not keep resubmitting what is already there.
+	if len(manager.created) != submissions {
+		t.Errorf("resubmitted an existing restore: %d submissions became %d",
+			submissions, len(manager.created))
+	}
+}
+
+func TestRunWaitsWhileARestoreIsStillRunning(t *testing.T) {
 	in, _, _ := restoreInput(t, false)
+	ctx := context.Background()
+
+	if _, err := dryrun.Reconcile(ctx, in); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := dryrun.Reconcile(ctx, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if out.State != rmn.DryRunBuildInProgress {
+		t.Errorf("state %q, want InProgress while Velero is still restoring", out.State)
+	}
+
+	if !strings.Contains(out.Message, "restore") {
+		t.Errorf("message does not name the restore being waited on: %s", out.Message)
+	}
+}
+
+func TestRunWaitsOnTheFirstPassThatOnlySubmits(t *testing.T) {
+	// Velero restores from a Backup object, so a capture taken on the other
+	// cluster is re-presented here first. The pass that asks for that has
+	// restored nothing yet.
+	in, _, _ := restoreInput(t, true)
 
 	out, err := dryrun.Reconcile(context.Background(), in)
 	if err != nil {
@@ -307,7 +403,7 @@ func TestRunWaitsWhileTheCaptureIsNotReadableYet(t *testing.T) {
 	}
 
 	if out.State != rmn.DryRunBuildInProgress {
-		t.Errorf("state %q, want InProgress", out.State)
+		t.Errorf("state %q, want InProgress on the submitting pass", out.State)
 	}
 }
 
