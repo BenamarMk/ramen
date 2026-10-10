@@ -210,6 +210,15 @@ func (v *VRGInstance) reconcileVolRepsAsSecondary() bool {
 
 			return true // Requeue to retry
 		}
+
+		// The PVCs a test failover restored here have to go before this
+		// cluster can be demoted. Nobody else will delete them: no user
+		// deployed them.
+		if err := v.dryRunDiscardRestoredPVCs(); err != nil {
+			v.log.Error(err, "Failed to discard the PVCs the dry run restored")
+
+			return true // Requeue to retry
+		}
 	}
 
 	groupPVCs := make(map[types.NamespacedName][]*corev1.PersistentVolumeClaim)

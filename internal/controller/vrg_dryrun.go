@@ -4,14 +4,17 @@
 package controllers
 
 import (
+	"fmt"
 	"time"
 
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	ramendrv1alpha1 "github.com/ramendr/ramen/api/v1alpha1"
 	"github.com/ramendr/ramen/internal/controller/dryrun"
 	"github.com/ramendr/ramen/internal/controller/kubeobjects"
+	rmnutil "github.com/ramendr/ramen/internal/controller/util"
 )
 
 // This is the only seam between the VRG reconcile and the test failover. The
@@ -228,6 +231,58 @@ func (v *VRGInstance) dryRunCapture() *dryrun.Capture {
 			},
 			Path:       path,
 			NamePrefix: namePrefix,
+		}
+	}
+
+	return nil
+}
+
+// dryRunDiscardRestoredPVCs deletes the PVCs a test failover restored into
+// the protected namespaces, so this cluster can go back to Secondary.
+//
+// Nothing else is going to delete them. Demoting a cluster waits for its
+// PVCs to be marked for deletion, and for a discovered application that
+// means waiting for the user to remove the workload. But on a test cluster
+// the user never deployed anything: Ramen restored these PVCs itself, from
+// S3, purely so their volumes could be promoted and snapshotted. Waiting for
+// someone to clean up something they never created leaves the DRPC in
+// WaitOnUserToCleanUp for good.
+//
+// Only the PVCs in the protected namespaces go. The test copy's own PVCs
+// live in the generated namespaces, are not selected by the VRG, and are
+// left running -- that is the whole point of the feature.
+func (v *VRGInstance) dryRunDiscardRestoredPVCs() error {
+	// status.dryRun is written only by the cluster that built a test copy.
+	// The annotation is not a safe substitute: it is copied onto every VRG
+	// the DRPC manages, including the one running the real workload, whose
+	// PVCs must never be touched here.
+	status := v.instance.Status.DryRun
+	if status == nil {
+		return nil
+	}
+
+	// Promotion to a real failover keeps them. They stop being scaffolding
+	// for a test copy and become the workload's own volumes.
+	if v.instance.Spec.ReplicationState != ramendrv1alpha1.Secondary {
+		return nil
+	}
+
+	for idx := range v.volRepPVCs {
+		pvc := &v.volRepPVCs[idx]
+
+		if _, restored := status.NamespaceMapping[pvc.Namespace]; !restored {
+			continue
+		}
+
+		if rmnutil.ResourceIsDeleted(pvc) {
+			continue
+		}
+
+		v.log.Info("Deleting a PVC the dry run restored, so this cluster can be demoted",
+			"pvc", pvc.Name, "namespace", pvc.Namespace, "runID", status.RunID)
+
+		if err := v.reconciler.Client.Delete(v.ctx, pvc); err != nil && !k8serrors.IsNotFound(err) {
+			return fmt.Errorf("deleting the restored PVC %s/%s: %w", pvc.Namespace, pvc.Name, err)
 		}
 	}
 

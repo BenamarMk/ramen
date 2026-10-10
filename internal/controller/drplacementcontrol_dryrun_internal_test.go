@@ -4,11 +4,20 @@
 package controllers
 
 import (
+	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/go-logr/logr"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	rmn "github.com/ramendr/ramen/api/v1alpha1"
 )
@@ -418,5 +427,122 @@ func TestDryRunRebuildNeedsProtectedNamespaces(t *testing.T) {
 
 	if _, err := d.dryRunStatus(); err == nil {
 		t.Error("rebuilt a plan with no protected namespaces to build it from")
+	}
+}
+
+// discardInstance is a VRG on the cluster that built a test copy, now being
+// demoted: the point at which the restored PVCs have to go.
+func discardInstance(t *testing.T, state rmn.ReplicationState, pvcNamespaces ...string) (
+	*VRGInstance, client.Client,
+) {
+	t.Helper()
+
+	scheme := runtime.NewScheme()
+	if err := clientgoscheme.AddToScheme(scheme); err != nil {
+		t.Fatalf("scheme: %v", err)
+	}
+
+	pvcs := make([]corev1.PersistentVolumeClaim, 0, len(pvcNamespaces))
+	objects := make([]client.Object, 0, len(pvcNamespaces))
+
+	for i, namespace := range pvcNamespaces {
+		pvc := corev1.PersistentVolumeClaim{
+			ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("pvc-%d", i), Namespace: namespace},
+		}
+		pvcs = append(pvcs, pvc)
+		objects = append(objects, pvc.DeepCopy())
+	}
+
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objects...).Build()
+
+	return &VRGInstance{
+		ctx:        context.Background(),
+		log:        logr.Discard(),
+		reconciler: &VolumeReplicationGroupReconciler{Client: c},
+		instance: &rmn.VolumeReplicationGroup{
+			ObjectMeta: metav1.ObjectMeta{Name: "test-vrg", Namespace: "ramen-ops"},
+			Spec:       rmn.VolumeReplicationGroupSpec{ReplicationState: state},
+			Status: rmn.VolumeReplicationGroupStatus{
+				DryRun: &rmn.DryRunStatus{
+					RunID:            "abc12345",
+					NamespaceMapping: map[string]string{"workload1": "workload1-test-abc12345"},
+				},
+			},
+		},
+		volRepPVCs: pvcs,
+	}, c
+}
+
+func pvcExists(t *testing.T, c client.Client, namespace, name string) bool {
+	t.Helper()
+
+	err := c.Get(context.Background(),
+		types.NamespacedName{Name: name, Namespace: namespace}, &corev1.PersistentVolumeClaim{})
+
+	return err == nil
+}
+
+func TestDryRunDiscardsThePVCsItRestored(t *testing.T) {
+	// Demoting waits for a PVC to be marked for deletion, which for a
+	// discovered app means waiting for the user to remove the workload. On a
+	// test cluster the user never deployed one, so without this the DRPC
+	// sits in WaitOnUserToCleanUp for good.
+	v, c := discardInstance(t, rmn.Secondary, "workload1")
+
+	if err := v.dryRunDiscardRestoredPVCs(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if pvcExists(t, c, "workload1", "pvc-0") {
+		t.Error("a PVC the dry run restored was left behind, blocking the demote")
+	}
+}
+
+func TestDryRunNeverDiscardsTheRealWorkloadsPVCs(t *testing.T) {
+	// The dry-run annotation is copied onto every VRG the DRPC manages,
+	// including the one running the real workload. Only status.dryRun marks
+	// the cluster that actually built a test copy, and getting that wrong
+	// here deletes the running application's volumes.
+	v, c := discardInstance(t, rmn.Secondary, "workload1")
+	v.instance.Status.DryRun = nil
+
+	if err := v.dryRunDiscardRestoredPVCs(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !pvcExists(t, c, "workload1", "pvc-0") {
+		t.Error("deleted a PVC on a cluster that never built a test copy")
+	}
+}
+
+func TestDryRunKeepsRestoredPVCsWhenPromoting(t *testing.T) {
+	// Clearing the flag with a failover to this cluster promotes it. These
+	// stop being scaffolding and become the workload's own volumes.
+	v, c := discardInstance(t, rmn.Primary, "workload1")
+
+	if err := v.dryRunDiscardRestoredPVCs(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !pvcExists(t, c, "workload1", "pvc-0") {
+		t.Error("deleted the volumes of a workload being promoted to a real failover")
+	}
+}
+
+func TestDryRunOnlyDiscardsProtectedNamespaces(t *testing.T) {
+	// A PVC outside the namespaces this run restored into is not its
+	// business, whatever else is going on in the cluster.
+	v, c := discardInstance(t, rmn.Secondary, "workload1", "somebody-elses-namespace")
+
+	if err := v.dryRunDiscardRestoredPVCs(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if pvcExists(t, c, "workload1", "pvc-0") {
+		t.Error("restored PVC was not discarded")
+	}
+
+	if !pvcExists(t, c, "somebody-elses-namespace", "pvc-1") {
+		t.Error("deleted a PVC outside the namespaces this run restored into")
 	}
 }
