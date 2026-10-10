@@ -25,6 +25,9 @@ import (
 // or aborted at any point.
 func HandOff(ctx context.Context, in Input) error {
 	runID := RunID(in.DRPCUID)
+	in.Log = in.Log.WithValues("runID", runID)
+
+	in.Log.Info("Handing the dry run source objects over")
 
 	snapshots := &snapv1.VolumeSnapshotList{}
 	if err := in.APIReader.List(ctx, snapshots,
@@ -32,11 +35,16 @@ func HandOff(ctx context.Context, in Input) error {
 		return fmt.Errorf("listing dry run snapshots: %w", err)
 	}
 
+	in.Log.Info("Dry run snapshots found", "count", len(snapshots.Items))
+
 	for idx := range snapshots.Items {
 		snapshot := &snapshots.Items[idx]
 
 		// Snapshots already in a test namespace belong to the copy and stay.
 		if snapshot.Labels[NamespaceOfLabel] != "" {
+			in.Log.V(1).Info("Leaving a test namespace snapshot alone",
+				"snapshot", snapshot.Name, "namespace", snapshot.Namespace)
+
 			continue
 		}
 
@@ -45,7 +53,13 @@ func HandOff(ctx context.Context, in Input) error {
 		}
 	}
 
-	return deleteRequests(ctx, in, runID)
+	if err := deleteRequests(ctx, in, runID); err != nil {
+		return err
+	}
+
+	in.Log.Info("Dry run source objects handed over")
+
+	return nil
 }
 
 // handOffSnapshot disposes of one source snapshot according to whether the
@@ -65,11 +79,15 @@ func handOffSnapshot(
 		// imported content with a Delete policy. Deleting the source objects
 		// must leave the storage alone, which the Retain policy set during
 		// the import guarantees.
-		in.Log.Info("Leaving the storage snapshot to the test copy", "pvc", pvcName)
+		in.Log.Info("Leaving the storage snapshot to the test copy",
+			"pvc", pvcName, "snapshot", snapshot.Name)
 	} else {
 		// Nothing took ownership -- the run was aborted before this volume
 		// was handed over. Let the source reclaim the storage rather than
 		// leaking a snapshot nothing references.
+		in.Log.Info("Reclaiming a storage snapshot the test copy never took",
+			"pvc", pvcName, "snapshot", snapshot.Name)
+
 		if err := reclaimSourceContent(ctx, in, snapshot); err != nil {
 			return err
 		}
@@ -165,6 +183,8 @@ func deleteRequests(ctx context.Context, in Input, runID string) error {
 	if err != nil {
 		return fmt.Errorf("deleting dry run restore requests: %w", err)
 	}
+
+	in.Log.Info("Deleted the dry run velero requests", "namespace", in.VeleroNamespace)
 
 	return nil
 }

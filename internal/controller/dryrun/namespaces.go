@@ -70,6 +70,8 @@ func policyObjectLists() []client.ObjectList {
 // namespaces the user never deleted, this leaves the earlier copy as it is.
 func ensureTestNamespaces(ctx context.Context, in Input, runID string, mapping map[string]string) error {
 	for source, target := range mapping {
+		in.Log.Info("Preparing test namespace", "source", source, "target", target)
+
 		if err := ensureTestNamespace(ctx, in, runID, source, target); err != nil {
 			return err
 		}
@@ -77,6 +79,8 @@ func ensureTestNamespaces(ctx context.Context, in Input, runID string, mapping m
 		if err := copyPolicyObjects(ctx, in, runID, source, target); err != nil {
 			return err
 		}
+
+		in.Log.Info("Test namespace ready", "namespace", target)
 	}
 
 	return nil
@@ -104,9 +108,11 @@ func ensureTestNamespace(ctx context.Context, in Input, runID, source, target st
 	}
 
 	if k8serrors.IsAlreadyExists(err) {
-		in.Log.Info("Adopting an existing test namespace", "namespace", target, "runID", runID)
+		in.Log.Info("Adopting an existing test namespace; its contents are left as they are",
+			"namespace", target)
 	} else {
-		in.Log.Info("Created test namespace", "namespace", target, "for", source)
+		in.Log.Info("Created test namespace", "namespace", target, "for", source,
+			"podSecurity", podSecurityLabels(labels))
 	}
 
 	return nil
@@ -115,6 +121,8 @@ func ensureTestNamespace(ctx context.Context, in Input, runID, source, target st
 // copyPolicyObjects reproduces the source namespace's policy posture in the
 // test namespace. What is copied is listed in policyObjectLists.
 func copyPolicyObjects(ctx context.Context, in Input, runID, source, target string) error {
+	copied := 0
+
 	for _, list := range policyObjectLists() {
 		if err := in.APIReader.List(ctx, list, client.InNamespace(source)); err != nil {
 			return fmt.Errorf("listing %T in %s: %w", list, source, err)
@@ -134,8 +142,13 @@ func copyPolicyObjects(ctx context.Context, in Input, runID, source, target stri
 			if err := copyPolicyObject(ctx, in, runID, source, target, obj); err != nil {
 				return err
 			}
+
+			copied++
 		}
 	}
+
+	in.Log.Info("Copied the source namespace's policy objects",
+		"from", source, "to", target, "count", copied)
 
 	return nil
 }
@@ -160,7 +173,25 @@ func copyPolicyObject(ctx context.Context, in Input, runID, source, target strin
 		return fmt.Errorf("copying %T %s into %s: %w", obj, obj.GetName(), target, err)
 	}
 
+	in.Log.V(1).Info("Copied policy object", "kind", fmt.Sprintf("%T", obj),
+		"name", obj.GetName(), "namespace", target, "alreadyThere", err != nil)
+
 	return nil
+}
+
+// podSecurityLabels are the admission labels carried over, logged because a
+// test copy that is rejected on admission fails for a reason that looks
+// nothing like DR.
+func podSecurityLabels(labels map[string]string) map[string]string {
+	carried := map[string]string{}
+
+	for key, value := range labels {
+		if strings.HasPrefix(key, podSecurityLabelPrefix) {
+			carried[key] = value
+		}
+	}
+
+	return carried
 }
 
 // retargetObject strips the identity a fetched object carries so it can be

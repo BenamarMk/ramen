@@ -95,5 +95,8 @@ func ensureResourceModifier(ctx context.Context, in Input, runID string) (string
 		return "", fmt.Errorf("creating resource modifier %s: %w", name, err)
 	}
 
+	in.Log.V(1).Info("Resource modifier ready; restored objects will have owner references stripped",
+		"configMap", name, "namespace", in.VeleroNamespace, "alreadyThere", err != nil)
+
 	return name, nil
 }

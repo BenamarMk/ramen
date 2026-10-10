@@ -22,6 +22,9 @@ import (
 // and it means the caller has exactly one shape of bad news to handle.
 func Eligible(in Input) string {
 	if len(in.CephFSPVCs) > 0 {
+		in.Log.Info("Refusing a CephFS workload; a partial test copy is worse than none",
+			"pvcs", in.CephFSPVCs)
+
 		// A partial copy -- some volumes present, some silently missing --
 		// is worse than none: the pods referencing the absent PVCs would sit
 		// Pending with nothing to explain why. CephFS volumes are skipped by

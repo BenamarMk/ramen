@@ -96,7 +96,14 @@ func (d *DRPCInstance) dryRunFinished() bool {
 func (d *DRPCInstance) RunDryRunFailover() (bool, error) {
 	const done = true
 
-	switch d.dryRunPhase() {
+	phase := d.dryRunPhase()
+	if phase == "" {
+		d.log.Info("Dry run requested")
+	} else {
+		d.log.Info("Dry run reconciling", "phase", phase)
+	}
+
+	switch phase {
 	case rmn.DryRunSettingUp:
 		return d.dryRunBuild()
 	case rmn.DryRunReverting:
@@ -115,8 +122,12 @@ func (d *DRPCInstance) RunDryRunFailover() (bool, error) {
 func (d *DRPCInstance) dryRunStart() (bool, error) {
 	const done = true
 
+	d.log.Info("Dry run pre-flight")
+
 	target, mapping, err := d.dryRunPlan()
 	if err != nil {
+		d.log.Info("Dry run refused", "reason", err.Error())
+
 		// The workload or the request is ineligible. Say so and stop rather
 		// than spinning: something has to change before this can succeed.
 		d.reconciler.recordFailure(d.ctx, d.instance, d.userPlacement,
@@ -128,6 +139,8 @@ func (d *DRPCInstance) dryRunStart() (bool, error) {
 	if !d.dryRunReadyToFailover() {
 		// Transient: the workload is not protected yet, or replication is
 		// behind. Wait rather than refuse.
+		d.log.Info("Dry run waiting: the workload is not protected, or replication is behind")
+
 		return !done, nil
 	}
 
@@ -141,7 +154,10 @@ func (d *DRPCInstance) dryRunStart() (bool, error) {
 		metav1.ConditionFalse, dryRunConditionReason,
 		fmt.Sprintf("Test failover building a copy on cluster %q", target))
 
-	d.log.Info("Starting dry run test failover", "target", target, "namespaces", mapping)
+	d.log.Info("Starting dry run test failover",
+		"target", target, "namespaces", mapping,
+		"runID", dryrun.RunID(string(d.instance.UID)),
+		"action", d.instance.Spec.Action, "phase", d.instance.Status.Phase)
 
 	if err := d.setDryRunPhase(rmn.DryRunSettingUp); err != nil {
 		return !done, err
@@ -237,6 +253,8 @@ func (d *DRPCInstance) dryRunBuild() (bool, error) {
 
 	target := status.TargetCluster
 
+	d.log.Info("Dry run promoting the test cluster", "cluster", target, "runID", status.RunID)
+
 	// Promote. The dry-run shape is forced onto this VRG by
 	// setVRGDryRunFields, which both the create and the flip path run through.
 	if _, err := d.createVRGManifestWorkAsPrimary(target); err != nil {
@@ -252,7 +270,16 @@ func (d *DRPCInstance) dryRunBuild() (bool, error) {
 
 	d.mirrorDryRunStatus(vrg)
 
-	if vrg.Status.DryRun == nil || vrg.Status.DryRun.State != rmn.DryRunBuildCompleted {
+	if vrg.Status.DryRun == nil {
+		d.log.Info("Dry run waiting for the test cluster to report", "cluster", target)
+
+		return !done, nil
+	}
+
+	if vrg.Status.DryRun.State != rmn.DryRunBuildCompleted {
+		d.log.Info("Dry run building", "cluster", target,
+			"state", vrg.Status.DryRun.State, "reason", vrg.Status.DryRun.Message)
+
 		return !done, nil
 	}
 
@@ -282,6 +309,9 @@ func (d *DRPCInstance) dryRunRevert() (bool, error) {
 	// cluster -- waits for it to report Secondary, and restores PeerReady. Its
 	// enclosing wrapper is deliberately not used: that one also writes to the
 	// source cluster's VRG, which a dry run must never touch.
+	d.log.Info("Dry run returning the test cluster to Secondary",
+		"cluster", status.TargetCluster, "home", home)
+
 	if err := d.EnsureCleanup(home); err != nil {
 		d.log.Info("Dry run waiting for the test cluster to return to Secondary", "reason", err.Error())
 
@@ -323,8 +353,14 @@ func (d *DRPCInstance) dryRunShouldYield() (rmn.DryRunPhase, bool) {
 		// likely an emergency.
 		if d.instance.Spec.Action == rmn.ActionFailover &&
 			d.instance.Spec.FailoverCluster == status.TargetCluster {
+			d.log.Info("Dry run handing over to a real failover on the cluster it already promoted",
+				"cluster", status.TargetCluster)
+
 			return rmn.DryRunCompleted, true
 		}
+
+		d.log.Info("Dry run aborting: the flag was cleared without asking for a failover here",
+			"action", d.instance.Spec.Action)
 
 		return rmn.DryRunReverting, true
 	}
@@ -336,6 +372,11 @@ func (d *DRPCInstance) dryRunShouldYield() (rmn.DryRunPhase, bool) {
 	// disaster.
 	if d.instance.Spec.Action != status.ActionAtStart ||
 		d.instance.Spec.FailoverCluster != status.FailoverClusterAtStart {
+		d.log.Info("Dry run pre-empted by a real request; freeing the peer",
+			"action", d.instance.Spec.Action, "wasAction", status.ActionAtStart,
+			"failoverCluster", d.instance.Spec.FailoverCluster,
+			"wasFailoverCluster", status.FailoverClusterAtStart)
+
 		return rmn.DryRunReverting, true
 	}
 
@@ -547,4 +588,7 @@ func (d *DRPCInstance) setVRGDryRunFields(vrg *rmn.VolumeReplicationGroup, clust
 	if building {
 		vrg.Spec.Action = rmn.VRGActionFailover
 	}
+
+	d.log.Info("Shaped the test cluster's VRG for the dry run",
+		"cluster", cluster, "dryRun", vrg.Spec.DryRun, "action", vrg.Spec.Action)
 }

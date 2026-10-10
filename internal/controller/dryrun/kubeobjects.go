@@ -35,6 +35,10 @@ func restoreKubeObjects(
 		return []string{"waiting to locate the kube objects capture in S3"}, nil
 	}
 
+	in.Log.Info("Restoring kube objects from the capture",
+		"s3Profile", in.Capture.S3Profile.Name, "path", in.Capture.Path,
+		"captureNamePrefix", in.Capture.NamePrefix, "mapping", mapping)
+
 	modifier, err := ensureResourceModifier(ctx, in, runID)
 	if err != nil {
 		return nil, err
@@ -50,6 +54,9 @@ func restoreKubeObjects(
 		return nil, err
 	}
 
+	in.Log.Info("Existing dry run velero requests",
+		"captures", len(captures), "restores", len(restores), "modifier", modifier)
+
 	var pending []string
 
 	for group, spec := range in.RecipeElements.RecoverWorkflow {
@@ -58,6 +65,9 @@ func restoreKubeObjects(
 		// namespace. Running them against a test copy is deferred, and the
 		// built-in VM recipe has no restore hooks, so nothing is lost today.
 		if spec.IsHook {
+			in.Log.V(1).Info("Skipping a hook step; hooks are not remapped to the test namespace",
+				"group", group)
+
 			continue
 		}
 
@@ -117,8 +127,18 @@ func restoreGroup(
 	// Already submitted: judge it on what the cluster says, not on what the
 	// submission handed back.
 	if request, submitted := restores[restoreName]; submitted {
-		return restoreProgress(in, restoreName, request), nil
+		reason := restoreProgress(in, restoreName, request)
+		if reason == "" {
+			in.Log.Info("Kube objects group restored", "group", spec.BackupName, "restore", restoreName)
+		} else {
+			in.Log.Info("Waiting on a kube objects restore", "restore", restoreName, "reason", reason)
+		}
+
+		return reason, nil
 	}
+
+	in.Log.Info("Submitting a kube objects restore",
+		"group", spec.BackupName, "capture", captureName, "restore", restoreName)
 
 	// The mapping is what redirects the restore. The spec's includedNamespaces
 	// stay as the source namespaces: those are the keys Velero matches the
@@ -146,8 +166,13 @@ func restoreGroup(
 		// Velero restores from a Backup object, so a capture taken on the
 		// other cluster has to be re-presented here first. That is what this
 		// pass asked for.
+		in.Log.Info("Asked for the capture to be made readable; nothing restored yet",
+			"capture", captureName)
+
 		return fmt.Sprintf("waiting for capture %s to be readable", captureName), nil
 	}
+
+	in.Log.Info("Kube objects restore submitted", "restore", restoreName)
 
 	return fmt.Sprintf("restore %s submitted", restoreName), nil
 }

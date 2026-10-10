@@ -124,14 +124,15 @@ type Output struct {
 // well as returned, because the two audiences differ: the message reaches a
 // DRPC user through status, the log reaches whoever is debugging the managed
 // cluster.
-func inProgress(in Input, runID, reason string) Output {
-	in.Log.Info("Dry run waiting", "runID", runID, "reason", reason)
+func inProgress(in Input, runID string, mapping map[string]string, reason string) Output {
+	in.Log.Info("Dry run waiting", "reason", reason)
 
 	return Output{
-		State:   rmn.DryRunBuildInProgress,
-		RunID:   runID,
-		Message: reason,
-		Requeue: true,
+		State:            rmn.DryRunBuildInProgress,
+		RunID:            runID,
+		NamespaceMapping: mapping,
+		Message:          reason,
+		Requeue:          true,
 	}
 }
 
@@ -144,56 +145,56 @@ func inProgress(in Input, runID, reason string) Output {
 func Reconcile(ctx context.Context, in Input) (Output, error) {
 	runID := RunID(in.DRPCUID)
 
+	// Bind the run to the logger once. Every line below, and every line in
+	// everything this calls, carries it -- so a single run can be followed
+	// across both clusters with one grep.
+	in.Log = in.Log.WithValues("runID", runID)
+
+	in.Log.Info("Dry run building the test copy",
+		"protectedNamespaces", sourceNamespaces(in.VRG), "pvcs", len(in.VolRepPVCs))
+
 	if reason := Eligible(in); reason != "" {
-		return inProgress(in, runID, reason), nil
+		return inProgress(in, runID, nil, reason), nil
 	}
 
 	mapping, err := NamespaceMapping(sourceNamespaces(in.VRG), runID)
 	if err != nil {
-		return inProgress(in, runID, err.Error()), nil
+		return inProgress(in, runID, nil, err.Error()), nil
 	}
+
+	in.Log.Info("Dry run stage 1/4 creating the test namespaces", "mapping", mapping)
 
 	if err := ensureTestNamespaces(ctx, in, runID, mapping); err != nil {
-		out := inProgress(in, runID, err.Error())
-		out.NamespaceMapping = mapping
-
-		return out, nil
+		return inProgress(in, runID, mapping, err.Error()), nil
 	}
+
+	in.Log.Info("Dry run stage 2/4 handing the volumes to the test namespaces")
 
 	pending, err := ensureTestVolumes(ctx, in, runID, mapping)
 	if err != nil {
-		out := inProgress(in, runID, err.Error())
-		out.NamespaceMapping = mapping
-
-		return out, nil
+		return inProgress(in, runID, mapping, err.Error()), nil
 	}
 
 	// Every test PVC must be Bound before the kube objects are restored: a
 	// workload restored against a claim that never binds sits Pending with
 	// nothing to say why.
 	if len(pending) > 0 {
-		out := inProgress(in, runID, strings.Join(pending, "; "))
-		out.NamespaceMapping = mapping
-
-		return out, nil
+		return inProgress(in, runID, mapping, strings.Join(pending, "; ")), nil
 	}
+
+	in.Log.Info("Dry run stage 3/4 test volumes are bound, restoring the kube objects")
 
 	pending, err = restoreKubeObjects(ctx, in, runID, mapping)
 	if err != nil {
-		out := inProgress(in, runID, err.Error())
-		out.NamespaceMapping = mapping
-
-		return out, nil
+		return inProgress(in, runID, mapping, err.Error()), nil
 	}
 
 	if len(pending) > 0 {
-		out := inProgress(in, runID, strings.Join(pending, "; "))
-		out.NamespaceMapping = mapping
-
-		return out, nil
+		return inProgress(in, runID, mapping, strings.Join(pending, "; ")), nil
 	}
 
-	in.Log.Info("Dry run test copy is ready", "runID", runID, "namespaces", mapping)
+	in.Log.Info("Dry run stage 4/4 kube objects restored")
+	in.Log.Info("Dry run test copy is ready", "namespaces", mapping)
 
 	return Output{
 		State:            rmn.DryRunBuildCompleted,

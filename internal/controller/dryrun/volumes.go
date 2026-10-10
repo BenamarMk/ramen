@@ -71,7 +71,11 @@ func ensureTestVolumes(
 		}
 
 		if reason != "" {
+			in.Log.Info("Test volume not ready", "pvc", pvc.Name, "reason", reason)
+
 			pending = append(pending, reason)
+		} else {
+			in.Log.Info("Test volume ready", "pvc", pvc.Name, "namespace", target)
 		}
 	}
 
@@ -85,6 +89,9 @@ func ensureTestVolume(
 	if err != nil || reason != "" {
 		return reason, err
 	}
+
+	in.Log.Info("Snapshot is ready to hand over", "pvc", pvc.Name,
+		"snapshot", source.Name, "content", *source.Status.BoundVolumeSnapshotContentName)
 
 	content, err := releaseSourceContent(ctx, in, *source.Status.BoundVolumeSnapshotContentName)
 	if err != nil {
@@ -102,6 +109,9 @@ func ensureTestVolume(
 	if err := createTestSnapshot(ctx, in, runID, pvc, target); err != nil {
 		return "", err
 	}
+
+	in.Log.Info("Storage snapshot imported into the test namespace",
+		"pvc", pvc.Name, "namespace", target, "handle", *content.Status.SnapshotHandle)
 
 	return createTestPVC(ctx, in, runID, pvc, target)
 }
@@ -146,6 +156,8 @@ func releaseSourceContent(
 	}
 
 	if content.Spec.DeletionPolicy == snapv1.VolumeSnapshotContentRetain {
+		in.Log.V(1).Info("Source content already released", "content", name)
+
 		return content, nil
 	}
 
@@ -195,6 +207,9 @@ func importContent(
 		return fmt.Errorf("importing snapshot content for PVC %s: %w", pvc.Name, err)
 	}
 
+	in.Log.V(1).Info("Imported snapshot content", "name", imported.Name,
+		"alreadyThere", err != nil)
+
 	return nil
 }
 
@@ -220,6 +235,9 @@ func createTestSnapshot(
 	if err != nil && !k8serrors.IsAlreadyExists(err) {
 		return fmt.Errorf("creating test snapshot for PVC %s: %w", pvc.Name, err)
 	}
+
+	in.Log.V(1).Info("Created test namespace snapshot",
+		"snapshot", snapshot.Name, "namespace", target, "alreadyThere", err != nil)
 
 	return nil
 }
@@ -255,6 +273,12 @@ func createTestPVC(
 	err := in.Client.Create(ctx, testPVC)
 	if err != nil && !k8serrors.IsAlreadyExists(err) {
 		return "", fmt.Errorf("creating test PVC %s in %s: %w", pvc.Name, target, err)
+	}
+
+	if err == nil {
+		in.Log.Info("Created test PVC from the imported snapshot",
+			"pvc", pvc.Name, "namespace", target,
+			"storageClass", pvc.Spec.StorageClassName, "size", pvc.Spec.Resources.Requests.Storage())
 	}
 
 	bound := &corev1.PersistentVolumeClaim{}

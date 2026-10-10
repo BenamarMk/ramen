@@ -53,6 +53,11 @@ func (v *VRGInstance) reconcileDryRun() ctrl.Result {
 		return v.updateVRGConditionsAndStatus(v.result)
 	}
 
+	v.log.Info("Reconciling the dry run test copy",
+		"protectedNamespaces", v.instance.Spec.ProtectedNamespaces,
+		"volRepPVCs", len(in.VolRepPVCs), "cephFSPVCs", in.CephFSPVCs,
+		"capture", in.Capture != nil)
+
 	out, err := dryrun.Reconcile(v.ctx, in)
 	if err != nil {
 		v.log.Error(err, "Dry run reconcile failed")
@@ -63,6 +68,9 @@ func (v *VRGInstance) reconcileDryRun() ctrl.Result {
 	}
 
 	v.setDryRunStatus(out)
+
+	v.log.Info("Dry run reconcile done",
+		"state", out.State, "message", out.Message, "requeue", out.Requeue)
 
 	if out.Requeue {
 		v.result.RequeueAfter = dryRunRequeueInterval
@@ -161,8 +169,6 @@ func (v *VRGInstance) dryRunHandOff() error {
 		return err
 	}
 
-	v.log.Info("Handing the dry run snapshots to the test copy")
-
 	return dryrun.HandOff(v.ctx, in)
 }
 
@@ -195,6 +201,9 @@ func (v *VRGInstance) dryRunCapture() *dryrun.Capture {
 
 		capture := sourceVRG.Status.KubeObjectProtection.CaptureToRecoverFrom
 		if capture == nil {
+			v.log.Info("Dry run found no capture to restore from",
+				"profile", accessor.S3ProfileName)
+
 			continue
 		}
 
@@ -203,6 +212,10 @@ func (v *VRGInstance) dryRunCapture() *dryrun.Capture {
 		path, _, namePrefix := kubeobjects.CapturePathNamesAndNamePrefix(
 			s3PathNamePrefix(v.instance.Namespace, v.instance.Name),
 			v.instance.Namespace, v.instance.Name, capture.Number, v.reconciler.kubeObjects)
+
+		v.log.Info("Dry run restoring from capture",
+			"profile", accessor.S3ProfileName, "number", capture.Number,
+			"capturedAt", capture.EndTime, "path", path)
 
 		return &dryrun.Capture{
 			S3Profile: dryrun.S3Profile{
