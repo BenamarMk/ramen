@@ -64,9 +64,19 @@ func (d *DRPCInstance) dryRunPhase() rmn.DryRunPhase {
 func (d *DRPCInstance) setDryRunPhase(phase rmn.DryRunPhase) error {
 	rmnutil.AddAnnotation(d.instance, rmn.DryRunAnnotation, string(phase))
 
+	// Updating the DRPC decodes the server's copy back over this object, and
+	// the server's copy carries whatever status was last persisted -- not the
+	// plan just computed in memory, which has not been written yet. Without
+	// holding on to it here, writing the annotation silently discards the
+	// plan, and the next reconcile finds a run in progress with nothing
+	// recorded about it.
+	plan := d.instance.Status.DryRun
+
 	if err := d.reconciler.Update(d.ctx, d.instance); err != nil {
 		return fmt.Errorf("failed to set dry run phase %s: %w", phase, err)
 	}
+
+	d.instance.Status.DryRun = plan
 
 	d.log.Info("Dry run phase set", "phase", phase)
 
@@ -121,16 +131,7 @@ func (d *DRPCInstance) dryRunStart() (bool, error) {
 		return !done, nil
 	}
 
-	now := metav1.Now()
-	d.instance.Status.DryRun = &rmn.DryRunStatus{
-		RunID:                  dryrun.RunID(string(d.instance.UID)),
-		TargetCluster:          target,
-		NamespaceMapping:       mapping,
-		State:                  rmn.DryRunBuildInProgress,
-		StartTime:              &now,
-		ActionAtStart:          d.instance.Spec.Action,
-		FailoverClusterAtStart: d.instance.Spec.FailoverCluster,
-	}
+	d.instance.Status.DryRun = d.newDryRunStatus(target, mapping)
 
 	// Lower PeerReady before anything else. It is true -- the peer is about to
 	// be Primary and is no longer available as a failover target -- and it is
@@ -150,6 +151,74 @@ func (d *DRPCInstance) dryRunStart() (bool, error) {
 	return !done, nil
 }
 
+// newDryRunStatus records what a run is about to do, so that later phases
+// read back the plan rather than recomputing it and risking a different
+// answer if cluster roles shift underneath them.
+func (d *DRPCInstance) newDryRunStatus(target string, mapping map[string]string) *rmn.DryRunStatus {
+	now := metav1.Now()
+
+	return &rmn.DryRunStatus{
+		RunID:                  dryrun.RunID(string(d.instance.UID)),
+		TargetCluster:          target,
+		NamespaceMapping:       mapping,
+		State:                  rmn.DryRunBuildInProgress,
+		StartTime:              &now,
+		ActionAtStart:          d.instance.Spec.Action,
+		FailoverClusterAtStart: d.instance.Spec.FailoverCluster,
+	}
+}
+
+// dryRunStatus returns the recorded plan, rebuilding it if it has gone
+// missing.
+//
+// A run in progress with no plan recorded used to be fatal. It is recoverable
+// instead: everything in the plan is derived -- the run ID from the DRPC UID,
+// the namespaces from that, the target from which cluster is not running the
+// workload -- and none of those move while a run is in flight, so rebuilding
+// gives the same answer the run started with.
+//
+// The exception is the spec snapshot. A real action requested during the
+// window where the plan was missing cannot be detected as a change, because
+// there is nothing left to compare against. That is a narrow hole, and it
+// closes as soon as the plan is recorded again.
+func (d *DRPCInstance) dryRunStatus() (*rmn.DryRunStatus, error) {
+	if status := d.instance.Status.DryRun; status != nil && status.TargetCluster != "" {
+		return status, nil
+	}
+
+	target, err := d.dryRunTargetCluster()
+	if err != nil {
+		return nil, err
+	}
+
+	namespaces := d.dryRunSourceNamespaces()
+	if len(namespaces) == 0 {
+		return nil, fmt.Errorf("dry run has no protected namespaces to rebuild its plan from")
+	}
+
+	mapping, err := dryrun.NamespaceMapping(namespaces, dryrun.RunID(string(d.instance.UID)))
+	if err != nil {
+		return nil, err
+	}
+
+	d.log.Info("Rebuilding the dry run plan, which was not recorded", "target", target)
+
+	d.instance.Status.DryRun = d.newDryRunStatus(target, mapping)
+
+	return d.instance.Status.DryRun, nil
+}
+
+// dryRunSourceNamespaces are the namespaces a test copy mirrors. The scope is
+// discovered applications, so this is always populated for a run that passed
+// pre-flight.
+func (d *DRPCInstance) dryRunSourceNamespaces() []string {
+	if d.instance.Spec.ProtectedNamespaces == nil {
+		return nil
+	}
+
+	return *d.instance.Spec.ProtectedNamespaces
+}
+
 // dryRunBuild promotes the test cluster and waits for it to report the test
 // copy built, then moves on to the revert.
 func (d *DRPCInstance) dryRunBuild() (bool, error) {
@@ -161,7 +230,12 @@ func (d *DRPCInstance) dryRunBuild() (bool, error) {
 		return !done, d.setDryRunPhase(next)
 	}
 
-	target := d.instance.Status.DryRun.TargetCluster
+	status, err := d.dryRunStatus()
+	if err != nil {
+		return !done, err
+	}
+
+	target := status.TargetCluster
 
 	// Promote. The dry-run shape is forced onto this VRG by
 	// setVRGDryRunFields, which both the create and the flip path run through.
@@ -192,6 +266,13 @@ func (d *DRPCInstance) dryRunBuild() (bool, error) {
 func (d *DRPCInstance) dryRunRevert() (bool, error) {
 	const done = true
 
+	// Recover the plan before anything reads it: the peer still has to be
+	// handed back even if the run's status was lost along the way.
+	status, err := d.dryRunStatus()
+	if err != nil {
+		return !done, err
+	}
+
 	home, err := d.dryRunHomeCluster()
 	if err != nil {
 		return !done, err
@@ -212,10 +293,10 @@ func (d *DRPCInstance) dryRunRevert() (bool, error) {
 	}
 
 	now := metav1.Now()
-	d.instance.Status.DryRun.CompletionTime = &now
+	status.CompletionTime = &now
 
 	d.log.Info("Dry run test failover complete; test copy left running",
-		"namespaces", d.instance.Status.DryRun.NamespaceMapping)
+		"namespaces", status.NamespaceMapping)
 
 	return done, nil
 }

@@ -27,9 +27,10 @@ func dryRunInstance(action rmn.DRAction, failoverCluster string) *DRPCInstance {
 				Annotations: map[string]string{rmn.DryRunAnnotation: string(rmn.DryRunSettingUp)},
 			},
 			Spec: rmn.DRPlacementControlSpec{
-				DryRun:          true,
-				Action:          action,
-				FailoverCluster: failoverCluster,
+				DryRun:              true,
+				Action:              action,
+				FailoverCluster:     failoverCluster,
+				ProtectedNamespaces: &[]string{"workload1", "workload2"},
 			},
 			Status: rmn.DRPlacementControlStatus{
 				DryRun: &rmn.DryRunStatus{
@@ -355,5 +356,67 @@ func TestDryRunLeavesTheRealWorkloadsConditionsAlone(t *testing.T) {
 			t.Errorf("condition %s was changed to %s by a stalled dry run",
 				condition.Type, condition.Status)
 		}
+	}
+}
+
+func TestDryRunRebuildsAPlanThatWentMissing(t *testing.T) {
+	// Writing the annotation decodes the server's copy of the DRPC back over
+	// the in-memory one, and the server's copy carries the status that was
+	// last persisted -- not the plan just computed. That used to leave a run
+	// in progress with nothing recorded about it, and the next reconcile
+	// dereferenced it.
+	//
+	// Everything in the plan is derived and none of it moves mid-run, so it
+	// is rebuilt rather than treated as fatal.
+	d := dryRunInstance("", "")
+	d.instance.Status.DryRun = nil
+	d.instance.Status.PreferredDecision.ClusterName = testHomeCluster
+
+	status, err := d.dryRunStatus()
+	if err != nil {
+		t.Fatalf("a missing plan was not recovered: %v", err)
+	}
+
+	if status.TargetCluster != testTargetCluster {
+		t.Errorf("rebuilt plan targets %q, want %q", status.TargetCluster, testTargetCluster)
+	}
+
+	if len(status.NamespaceMapping) == 0 {
+		t.Error("rebuilt plan has no namespace mapping")
+	}
+}
+
+func TestDryRunKeepsTheRecordedPlanWhenItIsThere(t *testing.T) {
+	// Rebuilding is a recovery path, not the normal one: a run must keep
+	// reading back what it started with, so it cannot retarget itself if
+	// cluster roles shift underneath it.
+	d := dryRunInstance("", "")
+	d.instance.Status.DryRun.RunID = "original"
+	d.instance.Status.PreferredDecision.ClusterName = testTargetCluster
+
+	status, err := d.dryRunStatus()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if status.RunID != "original" {
+		t.Errorf("recorded plan was replaced: run ID is %q", status.RunID)
+	}
+
+	if status.TargetCluster != testTargetCluster {
+		t.Errorf("recorded target was replaced with %q", status.TargetCluster)
+	}
+}
+
+func TestDryRunRebuildNeedsProtectedNamespaces(t *testing.T) {
+	// Without them there is nothing to derive a mapping from, and guessing
+	// would build a test copy somewhere nobody asked for.
+	d := dryRunInstance("", "")
+	d.instance.Status.DryRun = nil
+	d.instance.Spec.ProtectedNamespaces = nil
+	d.instance.Status.PreferredDecision.ClusterName = testHomeCluster
+
+	if _, err := d.dryRunStatus(); err == nil {
+		t.Error("rebuilt a plan with no protected namespaces to build it from")
 	}
 }
