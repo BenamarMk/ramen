@@ -446,7 +446,7 @@ func filterPVC(reader client.Reader, pvc *corev1.PersistentVolumeClaim, log logr
 // +kubebuilder:rbac:groups=core,resources=events,verbs=get;create;patch;update
 // +kubebuilder:rbac:groups=core,resources=secrets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=ramendr.openshift.io,resources=recipes,verbs=get;list;watch
-// +kubebuilder:rbac:groups="",resources=configmaps,verbs=list;watch;get;create;patch;update
+// +kubebuilder:rbac:groups="",resources=configmaps,verbs=list;watch;get;create;patch;update;delete
 // +kubebuilder:rbac:groups="apiextensions.k8s.io",resources=customresourcedefinitions,verbs=get;list;watch
 // +kubebuilder:rbac:groups=core,resources=pods/exec,verbs=create
 // +kubebuilder:rbac:groups="kubevirt.io",resources=virtualmachines,verbs=get;list;watch;patch;update;delete
@@ -457,7 +457,7 @@ func filterPVC(reader client.Reader, pvc *corev1.PersistentVolumeClaim, log logr
 // like the real thing. escalate and bind are needed to copy Roles and
 // RoleBindings whose rules exceed the operator's own permissions.
 //nolint:lll
-// +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch;create
+// +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch;create;delete
 // +kubebuilder:rbac:groups="",resources=resourcequotas;limitranges,verbs=get;list;watch;create
 // +kubebuilder:rbac:groups="networking.k8s.io",resources=networkpolicies,verbs=get;list;watch;create
 // +kubebuilder:rbac:groups="rbac.authorization.k8s.io",resources=roles;rolebindings,verbs=get;list;watch;create;escalate;bind

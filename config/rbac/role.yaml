@@ -8,9 +8,11 @@ rules:
   - ""
   resources:
   - configmaps
-  - persistentvolumes
+  - persistentvolumeclaims
+  - secrets
   verbs:
   - create
+  - delete
   - get
   - list
   - patch
@@ -52,6 +54,7 @@ rules:
   - namespaces
   verbs:
   - create
+  - delete
   - get
   - list
   - update
@@ -59,11 +62,9 @@ rules:
 - apiGroups:
   - ""
   resources:
-  - persistentvolumeclaims
-  - secrets
+  - persistentvolumes
   verbs:
   - create
-  - delete
   - get
   - list
   - patch

@@ -38,6 +38,10 @@ func builtCopy(t *testing.T) (dryrun.Input, client.Client, string) {
 			Name:   dryrun.ImportedContentName(runID, testPVCName),
 			Labels: map[string]string{dryrun.RunIDLabel: runID},
 		}},
+		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{
+			Name:      "dryrun-test-vrg-" + runID + "-resource-modifier",
+			Namespace: "velero",
+		}},
 	}
 
 	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(objects...).Build()
@@ -45,6 +49,8 @@ func builtCopy(t *testing.T) (dryrun.Input, client.Client, string) {
 	in := testInput(t, []string{sourceNS})
 	in.Client = c
 	in.APIReader = c
+	in.VRG.Name = "test-vrg"
+	in.VeleroNamespace = "velero"
 	in.VRG.Status.DryRun = &rmn.DryRunStatus{
 		RunID:            runID,
 		NamespaceMapping: map[string]string{sourceNS: target},
@@ -156,5 +162,21 @@ func TestTearDownIsDoneWhenThereIsNothingToDelete(t *testing.T) {
 
 	if !done {
 		t.Error("tear down did not finish with no copy recorded")
+	}
+}
+
+func TestTearDownRemovesTheResourceModifier(t *testing.T) {
+	// It lives in the Velero namespace rather than a test namespace, so
+	// nothing deletes it on the way past; one would be left behind per run.
+	in, c, _ := builtCopy(t)
+
+	tearDownUntilDone(t, in)
+
+	name := "dryrun-test-vrg-" + dryrun.RunID(testDRPCUID) + "-resource-modifier"
+
+	err := c.Get(context.Background(),
+		client.ObjectKey{Name: name, Namespace: "velero"}, &corev1.ConfigMap{})
+	if err == nil {
+		t.Error("the resource modifier survived tear down")
 	}
 }

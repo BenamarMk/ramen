@@ -10,6 +10,7 @@ import (
 	snapv1 "github.com/kubernetes-csi/external-snapshotter/client/v8/apis/volumesnapshot/v1"
 	corev1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -45,6 +46,10 @@ func TearDown(ctx context.Context, in Input) (bool, error) {
 	}
 
 	if err := deleteImportedContents(ctx, in, runID); err != nil {
+		return false, err
+	}
+
+	if err := deleteResourceModifier(ctx, in, runID); err != nil {
 		return false, err
 	}
 
@@ -112,6 +117,24 @@ func deleteImportedContents(ctx context.Context, in Input, runID string) error {
 		if err := in.Client.Delete(ctx, content); err != nil && !k8serrors.IsNotFound(err) {
 			return fmt.Errorf("deleting imported snapshot content %s: %w", content.Name, err)
 		}
+	}
+
+	return nil
+}
+
+// deleteResourceModifier removes the rules this run gave Velero. It lives in
+// the Velero namespace rather than a test namespace, so nothing deletes it on
+// the way past.
+func deleteResourceModifier(ctx context.Context, in Input, runID string) error {
+	configMap := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      modifierConfigMapName(in.VRG.GetName(), runID),
+			Namespace: in.VeleroNamespace,
+		},
+	}
+
+	if err := in.Client.Delete(ctx, configMap); err != nil && !k8serrors.IsNotFound(err) {
+		return fmt.Errorf("deleting resource modifier %s: %w", configMap.Name, err)
 	}
 
 	return nil
