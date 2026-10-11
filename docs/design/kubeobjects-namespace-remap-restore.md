@@ -5,8 +5,9 @@ SPDX-License-Identifier: Apache-2.0
 
 # Test Failover Into Generated Test Namespaces
 
-**Status:** draft, iteration 11 — **design complete**. §3 records every
-decision. §13 holds implementation notes, not open questions.
+**Status:** iteration 12 — implemented. §3 records every decision. §13 holds
+implementation notes. Sections amended after a first run on a real cluster
+are marked **[from implementation]**.
 
 ## 1. Scope
 
@@ -102,9 +103,9 @@ user to inspect.
   dryRun: false)                   ⑨ HandOff: give the storage snapshots
                                      to the test namespaces
                                            │
-                                   ⑩ demote volumes, delete the real
-                                     PVCs/PVs/VRs from the protected
-                                     namespaces — existing Secondary path
+                                   ⑩ delete the PVCs restored in ① -- Ramen
+                                     created them, so Ramen removes them --
+                                     then demote, via the Secondary path
                                            │
                                    ⑪ test namespaces, their PVCs and the
                                      restored application are LEFT RUNNING
@@ -191,6 +192,8 @@ code selects on.
 |    | pre-emption path, §5.4                                               |
 | 34 | The two-Primary window is accepted, budgeted at **~5 minutes**, §12  |
 | 35 | The legacy dry-run annotations are **deleted**, not carried, §8.1   |
+| 36 | The revert **deletes the PVCs step ① restored**; nothing else will, |
+|    | §5.7. Guarded on `status.dryRun`, never on the annotation           |
 
 ## 4. Current Implementation
 
@@ -892,7 +895,7 @@ What survives the revert:
 
 | Object                            | On revert                     |
 | --------------------------------- | ----------------------------- |
-| Real PVCs/PVs in protected ns     | removed by the Secondary path |
+| Real PVCs/PVs in protected ns     | **deleted by the dry run**, §5.7.1 |
 | VolumeReplications                | demoted                       |
 | Source-namespace `VolumeSnapshot` | deleted                       |
 | Source-namespace VSC              | object deleted, snapshot kept |
@@ -917,6 +920,39 @@ snapshots outright, which would destroy the test volumes. It is replaced by
 Each step tolerates the object being absent, because a run pre-empted or
 aborted mid-build may have completed only some of them. `HandOff` runs on
 revert, on promotion (§5.4) and from `processForDeletion`.
+
+#### 5.7.1 Discarding the PVCs step ① restored — [from implementation]
+
+Earlier drafts said the revert removed the real PVCs from the protected
+namespaces "exactly as today". That was wrong, and it hung the first run on a
+real cluster: DRPC parked in `WaitOnUserToCleanUp`, VRG `Unknown`, refusing to
+demote.
+
+Demoting waits for each PVC to be marked for deletion
+(`isPVCReadyForSecondary`, `vrg_volrep.go:316`). For a discovered application
+"as today" means waiting for the **user** to remove the workload. On a test
+cluster there is no workload to remove: Ramen restored those PVCs itself in
+step ①, from S3, purely so their volumes could be promoted and snapshotted. So
+the wait never ended.
+
+The revert therefore deletes them, in `dryRunDiscardRestoredPVCs`, before the
+Secondary path runs. Only the PVCs in the protected namespaces — the test
+copy's own live in the generated namespaces, are not selected by the VRG, and
+keep running.
+
+**The guard is `status.dryRun`, never the annotation.** `setVRGAnnotations`
+copies the dry-run annotation onto *every* VRG the DRPC manages, including the
+one running the real workload; only the cluster that actually built a test
+copy writes the status. Gating this on the annotation would delete a running
+application's volumes on its next demote.
+
+**Promotion keeps them.** Clearing the flag with a failover to this cluster
+(§5.9) turns them from a test copy's scaffolding into the workload's own
+volumes, so the discard is skipped when the VRG is staying Primary.
+
+The VRG *deletion* path deliberately does not discard them. Deleting a DRPC
+normally preserves PVCs, and whether dry-run leftovers should be an exception
+is a separate decision — see §13.
 
 ### 5.10 Eligibility and pre-flight guards
 
@@ -1236,8 +1272,11 @@ new hub plumbing. The `dryrun` package is a stepping stone.
 - **Routes and Ingresses collide on hostname** with the originals.
 - **Embedded namespace references are not rewritten.** See §1.
 - **The real PVCs briefly exist on the test cluster** in the protected
-  namespaces, promoted, so they can be snapshotted. The application itself is
-  never restored there.
+  namespaces, promoted, so they can be snapshotted. The revert deletes them
+  (§5.7.1). The application itself is never restored there.
+- **A DRPC deleted while test leftovers exist keeps them.** The VRG deletion
+  path does not discard the PVCs step ① restored, so they stay with the test
+  namespaces for manual cleanup — see §13.
 
 ## 13. Implementation Notes
 
@@ -1268,3 +1307,44 @@ No open design questions. These are the details most likely to be got wrong.
    `EnsureCleanup` early-returns when `PeerReady` is already `True` for the
    current generation, so a revert that runs without the flag having been
    lowered first would declare success without demoting anything.
+
+## 14. What The First Run Taught Us — [from implementation]
+
+Three defects reached a cluster before anything caught them. Two share a root
+cause worth naming, because the design did not anticipate it and the unit
+tests could not have.
+
+**Assuming an API call's return value reflects server state.** Twice.
+`Update` on the DRPC decodes the stored object back over the one in memory,
+which discarded the run plan the moment the phase annotation was written and
+panicked the next reconcile. Then `RecoverRequestCreate` handed back the
+`Restore` it had just constructed -- no status on it, whatever Velero had
+done -- so the run reported `restore.status.phase absent` forever against a
+restore that had completed minutes earlier.
+
+Both were invisible to the unit tests, because the fakes returned what the
+code expected rather than what the API does. The mocks now model the real
+semantics: a submission reports no phase, and only a read-back knows. That
+change alone makes the second bug reproducible in a test.
+
+**Assuming "the existing path handles it".** §2 said the revert removed the
+restored PVCs "exactly as today". It does not: today means waiting for a user
+who, on a test cluster, has nothing to delete. See §5.7.1.
+
+The lesson for the phases still unwritten is that the interesting failures
+are at the seams with machinery this design reuses -- Velero's request
+lifecycle, the client's write semantics, the discovered-app demote contract
+-- and none of them are reachable from a fake.
+
+### Still open
+
+- **The VRG deletion path does not discard the restored PVCs** (§5.7.1).
+  Deleting a DRPC normally preserves PVCs; whether dry-run leftovers are an
+  exception needs deciding rather than defaulting.
+- **The Ceph RBD validation is still owed.** No cluster has yet confirmed
+  that an imported `VolumeSnapshotContent` provisions a usable PVC, or that
+  deleting the source snapshot under `Retain` leaves it alone.
+- **Four e2e scenarios are unwritten**: pre-emption mid-build, hand-over to a
+  real failover, aborting a stalled run, and deleting the DRPC mid-run. Each
+  races a build whose real timing is now observable, so they can be written
+  against something real rather than guessed at.
