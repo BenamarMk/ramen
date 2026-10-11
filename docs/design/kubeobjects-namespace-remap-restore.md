@@ -114,9 +114,9 @@ user to inspect.
       │ PeerReady = true
       │ annotate  dry-run: Completed      ← terminal
       ▼
- DRPC status lists the test namespaces.
- Another dry run requires deleting the annotation; the user is
- expected to delete the test namespaces too (§12).
+ DRPC status lists the test namespaces. The copy runs until the user
+ clears spec.dryRun, which deletes it and removes the annotation --
+ freeing the DRPC to run another test (§5.3.1).
 ```
 
 Meanwhile, on the **source cluster**, nothing at all happens. Its VRG is never
@@ -169,8 +169,9 @@ code selects on.
 |    | but the VRG delete path must run `HandOff`, §5.4                     |
 | 18 | States are `SettingUp → Reverting → Completed`, §5.3                 |
 | 19 | Volumes stay promoted for the whole build; RPO window accepted       |
-| 20 | `runID` is **derived from the DRPC UID**; a repeat run **reuses      |
-|    | whatever is there**. No leftover detection. §5.5, §12                |
+| 20 | `runID` is **derived from the DRPC UID**, so every run on a DRPC    |
+|    | targets the same namespaces. Safe because decision 38 deletes them  |
+|    | before the next run can start. §5.5, §12                            |
 | 21 | **No timeout.** A stalled run waits for a human indefinitely, §5.9   |
 | 22 | **`spec.dryRun` alone starts the test.** `spec.action` is not read   |
 |    | to decide *what* to do and is never written, §5.2                    |
@@ -194,9 +195,9 @@ code selects on.
 | 34 | The two-Primary window is accepted, budgeted at **~5 minutes**, §12  |
 | 35 | The legacy dry-run annotations are **deleted**, not carried, §8.1   |
 | 36 | The revert **deletes the PVCs step ① restored**; nothing else will, |
-|    | §5.7.1. Guarded on `status.dryRun`, never on the annotation         |
+|    | §5.9.1. Guarded on `status.dryRun`, never on the annotation         |
 | 37 | **Auto-resync stays on through every dry-run phase**, including    |
-|    | the terminal one, §5.7.2                                            |
+|    | the terminal one, §5.9.2                                            |
 | 38 | Clearing `spec.dryRun` **tears the test copy down**, and Ramen then |
 |    | removes its own annotation, §5.3.1. Supersedes manual teardown      |
 
@@ -571,15 +572,18 @@ drplacementcontrol.ramendr.openshift.io/dry-run:
                                                       ▼
                                                   Completed
                                                       │
-                      user: delete annotation         │
-                            delete test namespaces    │
+                      user: dryRun = false            │
+                                                      ▼
+                                                 TearingDown
+                                                      │
+                      test copy deleted               │
                                                       ▼
                                                    absent
 ```
 
-Only Ramen writes this annotation, and it never clears it — leaving the
-terminal state is a deliberate user action, and it is the only gate on a second
-run (decision 8).
+Only Ramen writes this annotation. It is present for as long as a test copy
+exists and is removed once the copy has been torn down, which is what gates a
+second run on the first being finished with (decision 8, §5.3.1).
 
 The annotation is propagated to the test VRG so the managed cluster can
 distinguish a dry run from a real failover (`autoResync`, `vrg_volrep.go:1451`,
@@ -617,7 +621,7 @@ Three details that are not obvious:
   refuses a VRG that is not Primary) nor `updateVRGState` (which returns early
   when the state already matches) will carry an annotation change there.
   `refreshVRGAnnotations` exists for that one job.
-- **A promotion is not a tear-down.** Handing over to a real failover (§5.9)
+- **A promotion is not a tear-down.** Handing over to a real failover (§5.11)
   clears the annotation outright rather than finishing into `Completed`, which
   would read as a delete request the moment the cleared flag was seen. The copy
   keeps running alongside the now real workload.
@@ -714,8 +718,10 @@ already receives it as `DRPCUIDAnnotation` (`drplacementcontrol.go:1990`), so
 nothing extra is carried and nothing is lost if status is lost.
 
 Every run on a given DRPC therefore targets the same namespace names. Ramen
-creates what is missing, adopts what is present, and carries on. §12 records
-what that produces on a repeat run.
+creates what is missing and adopts what is present, which would be a hazard
+if a previous copy could still be there — decision 38 is what makes sure it
+cannot: the namespaces are deleted before the annotation that gates the next
+run is removed. §12 records the one way it remains reachable.
 
 Namespace names are capped at 63 characters, so the source name is truncated
 before the suffix is appended. Truncation can collide — two long source names
@@ -935,7 +941,7 @@ What survives the revert:
 
 | Object                            | On revert                     |
 | --------------------------------- | ----------------------------- |
-| Real PVCs/PVs in protected ns     | **deleted by the dry run**, §5.7.1 |
+| Real PVCs/PVs in protected ns     | **deleted by the dry run**, §5.9.1 |
 | VolumeReplications                | demoted                       |
 | Source-namespace `VolumeSnapshot` | deleted                       |
 | Source-namespace VSC              | object deleted, snapshot kept |
@@ -961,7 +967,7 @@ Each step tolerates the object being absent, because a run pre-empted or
 aborted mid-build may have completed only some of them. `HandOff` runs on
 revert, on promotion (§5.4) and from `processForDeletion`.
 
-#### 5.7.1 Discarding the PVCs step ① restored — [from implementation]
+#### 5.9.1 Discarding the PVCs step ① restored — [from implementation]
 
 Earlier drafts said the revert removed the real PVCs from the protected
 namespaces "exactly as today". That was wrong, and it hung the first run on a
@@ -987,14 +993,14 @@ copy writes the status. Gating this on the annotation would delete a running
 application's volumes on its next demote.
 
 **Promotion keeps them.** Clearing the flag with a failover to this cluster
-(§5.9) turns them from a test copy's scaffolding into the workload's own
+(§5.11) turns them from a test copy's scaffolding into the workload's own
 volumes, so the discard is skipped when the VRG is staying Primary.
 
 The VRG *deletion* path deliberately does not discard them. Deleting a DRPC
 normally preserves PVCs, and whether dry-run leftovers should be an exception
 is a separate decision — see §13.
 
-#### 5.7.2 Auto-resync outlives the run — [from implementation]
+#### 5.9.2 Auto-resync outlives the run — [from implementation]
 
 A test failover promotes the test cluster's volumes in order to snapshot
 them, and that divergence is what makes a resync necessary afterwards. The
@@ -1006,7 +1012,7 @@ already Secondary -- the hub sets that phase after `EnsureCleanup` confirms
 the demote -- so treating `Completed` as "over" switched auto-resync off at
 the exact moment it was wanted, leaving the volumes diverged.
 
-This guard is deliberately looser than §5.7.1's. That one has to know which
+This guard is deliberately looser than §5.9.1's. That one has to know which
 cluster built the test copy, and keys on `status.dryRun` for it. This one
 only asks whether these volumes were promoted by a test, and the annotation
 answers that even for a run that never got far enough to write status. Being
@@ -1056,6 +1062,28 @@ missing, which is worse than a clear refusal.
 - `VRGConditionTypeKubeObjectsReady` is **not** set by a dry run, so a later
   real failover still performs its own restore (`shouldRestoreKubeObjects`,
   `volumereplicationgroup_controller.go:1626`).
+
+### 5.11 Promotion instead of revert
+
+From `Completed` the user may clear `dryRun` but **leave** `action: Failover`
+pointing at the cluster the test promoted. That is the existing
+promote-to-real-failover path and it stays supported:
+
+- The VRG stays Primary. `spec.DryRun` is now false, so the branch in §5.1
+  falls through to the normal path and the in-place kube object restore runs
+  for the first time, into the protected namespaces.
+- `shouldRestoreKubeObjects` returns true because the dry run never set
+  `KubeObjectsReady` (§5.10), so the real restore is not skipped.
+- `dryrun.HandOff` runs here too, so the test copy keeps its volumes.
+- The PVCs step ① restored are **kept**, not discarded (§5.9.1): they stop
+  being a test copy's scaffolding and become the workload's own volumes.
+- The annotation is cleared outright rather than moved to `Completed`, which
+  would read as a tear-down request the moment the cleared flag was seen
+  (§5.3.1). The test copy keeps running alongside the now real workload.
+
+Whether a promotion *should* also take the test copy down is deliberately
+left as it is: deleting a copy during what is most likely an emergency is not
+recoverable, and nothing about promoting says the copy is unwanted.
 
 ## 6. API and RBAC Changes
 
@@ -1329,7 +1357,7 @@ new hub plumbing. The `dryrun` package is a stepping stone.
 - **Embedded namespace references are not rewritten.** See §1.
 - **The real PVCs briefly exist on the test cluster** in the protected
   namespaces, promoted, so they can be snapshotted. The revert deletes them
-  (§5.7.1). The application itself is never restored there.
+  (§5.9.1). The application itself is never restored there.
 - **A DRPC deleted while test leftovers exist keeps them.** The VRG deletion
   path does not discard the PVCs step ① restored, so they stay with the test
   namespaces for manual cleanup — see §13.
@@ -1385,7 +1413,7 @@ change alone makes the second bug reproducible in a test.
 
 **Assuming "the existing path handles it".** §2 said the revert removed the
 restored PVCs "exactly as today". It does not: today means waiting for a user
-who, on a test cluster, has nothing to delete. See §5.7.1.
+who, on a test cluster, has nothing to delete. See §5.9.1.
 
 The lesson for the phases still unwritten is that the interesting failures
 are at the seams with machinery this design reuses -- Velero's request
@@ -1394,7 +1422,7 @@ lifecycle, the client's write semantics, the discovered-app demote contract
 
 ### Still open
 
-- **The VRG deletion path does not discard the restored PVCs** (§5.7.1).
+- **The VRG deletion path does not discard the restored PVCs** (§5.9.1).
   Deleting a DRPC normally preserves PVCs; whether dry-run leftovers are an
   exception needs deciding rather than defaulting.
 - **The Ceph RBD validation is still owed.** No cluster has yet confirmed
