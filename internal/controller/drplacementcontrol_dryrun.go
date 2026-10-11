@@ -83,12 +83,24 @@ func (d *DRPCInstance) setDryRunPhase(phase rmn.DryRunPhase) error {
 	return nil
 }
 
-// dryRunFinished reports whether a dry run has run its course. Once it has,
-// executeAction stops routing here and the DRPC behaves normally again even
-// though spec.dryRun is still set -- otherwise a stale flag would block a real
-// failover indefinitely.
-func (d *DRPCInstance) dryRunFinished() bool {
-	return d.dryRunPhase() == rmn.DryRunCompleted
+// dryRunWants reports whether the dry-run path has anything to do.
+//
+// The interesting case is Completed, where a test copy is up and waiting to
+// be looked at. With the flag still set there is nothing to do and real
+// actions must pass through -- a stale flag cannot be allowed to block a
+// failover. Clearing the flag from there is what asks for the copy to be
+// taken down.
+func (d *DRPCInstance) dryRunWants() bool {
+	// Every other phase is a run already under way.
+	//nolint:exhaustive
+	switch d.dryRunPhase() {
+	case "":
+		return d.instance.Spec.DryRun
+	case rmn.DryRunCompleted:
+		return !d.instance.Spec.DryRun
+	default:
+		return true
+	}
 }
 
 // RunDryRunFailover drives the test failover. It is a state machine over the
@@ -108,13 +120,92 @@ func (d *DRPCInstance) RunDryRunFailover() (bool, error) {
 		return d.dryRunBuild()
 	case rmn.DryRunReverting:
 		return d.dryRunRevert()
+	case rmn.DryRunTearingDown:
+		return d.dryRunTearDown()
 	case rmn.DryRunCompleted:
-		// Terminal. dryRunFinished keeps us from being called at all, so this
-		// is only reachable in the reconcile that sets it.
-		return done, nil
+		// The copy is up. dryRunWants only routes here from Completed once
+		// the flag has been cleared, which asks for the copy to go.
+		d.log.Info("Dry run tearing the test copy down")
+
+		return !done, d.setDryRunPhase(rmn.DryRunTearingDown)
 	default:
 		return d.dryRunStart()
 	}
+}
+
+// clearDryRunPhase removes the annotation, freeing the DRPC to run another
+// test. It is the last thing a run does.
+func (d *DRPCInstance) clearDryRunPhase() error {
+	if !rmnutil.HasAnnotation(d.instance, rmn.DryRunAnnotation) {
+		return nil
+	}
+
+	delete(d.instance.Annotations, rmn.DryRunAnnotation)
+
+	plan := d.instance.Status.DryRun
+
+	if err := d.reconciler.Update(d.ctx, d.instance); err != nil {
+		return fmt.Errorf("failed to clear the dry run phase: %w", err)
+	}
+
+	d.instance.Status.DryRun = plan
+
+	d.log.Info("Dry run finished; another test failover may be started")
+
+	return nil
+}
+
+// dryRunTearDown waits for the test cluster to delete the copy, then clears
+// the annotation.
+//
+// The test cluster does the deleting -- the namespaces are there, not here --
+// and reports being done by emptying its own status.dryRun.
+func (d *DRPCInstance) dryRunTearDown() (bool, error) {
+	const done = true
+
+	status := d.instance.Status.DryRun
+	if status == nil {
+		return !done, d.clearDryRunPhase()
+	}
+
+	target := status.TargetCluster
+
+	// Carry the phase to the test cluster. Its VRG is Secondary by now, so
+	// none of the usual update paths will refresh its annotations.
+	if err := d.refreshVRGAnnotations(target); err != nil {
+		d.log.Info("Dry run waiting to tell the test cluster to tear down", "reason", err.Error())
+
+		return !done, nil
+	}
+
+	vrg := d.vrgs[target]
+	if vrg != nil && vrg.Status.DryRun != nil {
+		d.log.Info("Dry run waiting for the test copy to be deleted",
+			"cluster", target, "namespaces", vrg.Status.DryRun.NamespaceMapping)
+
+		return !done, nil
+	}
+
+	d.instance.Status.DryRun = nil
+
+	return done, d.clearDryRunPhase()
+}
+
+// refreshVRGAnnotations rewrites a VRG ManifestWork with current annotations
+// and nothing else.
+//
+// ensureVRGManifestWork refuses a VRG that is not Primary, and updateVRGState
+// returns early when the state already matches, so neither will carry a phase
+// change to a cluster that has already been demoted.
+func (d *DRPCInstance) refreshVRGAnnotations(cluster string) error {
+	vrg, err := d.getVRGFromManifestWork(cluster)
+	if err != nil {
+		return err
+	}
+
+	d.setVRGAnnotations(vrg, cluster)
+
+	return d.updateManifestWork(cluster, vrg)
 }
 
 // dryRunStart validates that a test failover can begin, records what it is
@@ -243,6 +334,10 @@ func (d *DRPCInstance) dryRunBuild() (bool, error) {
 	if next, yield := d.dryRunShouldYield(); yield {
 		d.log.Info("Dry run yielding to a real request", "phase", next)
 
+		if next == "" {
+			return !done, d.clearDryRunPhase()
+		}
+
 		return !done, d.setDryRunPhase(next)
 	}
 
@@ -356,7 +451,11 @@ func (d *DRPCInstance) dryRunShouldYield() (rmn.DryRunPhase, bool) {
 			d.log.Info("Dry run handing over to a real failover on the cluster it already promoted",
 				"cluster", status.TargetCluster)
 
-			return rmn.DryRunCompleted, true
+			// Step aside entirely rather than finishing into Completed, which
+			// would read as "tear the copy down" the moment the flag is seen
+			// clear. A promotion is not a request to delete anything, and the
+			// copy keeps running alongside the now real workload.
+			return "", true
 		}
 
 		d.log.Info("Dry run aborting: the flag was cleared without asking for a failover here",

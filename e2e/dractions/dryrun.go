@@ -94,26 +94,77 @@ func validateDryRunLeftTheWorkloadAlone(before, after *ramen.DRPlacementControl)
 // failover must never touch it.
 const lastAppDeploymentCluster = "drplacementcontrol.ramendr.openshift.io/last-app-deployment-cluster"
 
-// CleanupDryRun removes the test copy. Ramen deliberately leaves it running
-// for the user to inspect, so the test has to take it down itself, along with
-// the annotation that blocks a second run.
+// CleanupDryRun asks Ramen to take the test copy down, by clearing the flag
+// that kept it up, and waits until it is gone.
+//
+// Clearing spec.dryRun is the whole gesture: Ramen deletes the test
+// namespaces and then removes its own annotation, which is what frees the
+// DRPC to run another test.
 func CleanupDryRun(ctx types.TestContext, namespaces map[string]string) error {
 	log := ctx.Logger()
+	managementNamespace := ctx.ManagementNamespace()
+	name := ctx.Name()
+
+	log.Infof("Tearing down the test copy in %v", namespaces)
+
+	if err := setDryRun(ctx, managementNamespace, name, false); err != nil {
+		return err
+	}
+
+	if err := waitDryRunGone(ctx, managementNamespace, name); err != nil {
+		return err
+	}
 
 	cluster, err := dryRunTargetCluster(ctx)
 	if err != nil {
 		return err
 	}
 
+	// Ramen says it is done when the annotation goes. Check the namespaces
+	// really went with it rather than taking that on trust.
 	for _, testNamespace := range namespaces {
-		log.Infof("Deleting test namespace %q from cluster %q", testNamespace, cluster.Name)
+		err := cluster.Client.Get(ctx.Context(),
+			k8stypes.NamespacedName{Name: testNamespace}, &corev1.Namespace{})
+		if err == nil {
+			return fmt.Errorf("test namespace %q survived tear down on cluster %q",
+				testNamespace, cluster.Name)
+		}
 
-		if err := deleteTestNamespace(ctx, cluster, testNamespace); err != nil {
+		if !k8serrors.IsNotFound(err) {
 			return err
 		}
 	}
 
-	return clearDryRunAnnotation(ctx, ctx.ManagementNamespace(), ctx.Name())
+	log.Info("Test copy torn down")
+
+	return nil
+}
+
+// waitDryRunGone waits for Ramen to remove the dry-run annotation, which it
+// does only once the test copy has actually been deleted.
+func waitDryRunGone(ctx types.TestContext, namespace, name string) error {
+	log := ctx.Logger()
+	start := time.Now()
+
+	for {
+		drpc, err := getDRPC(ctx, namespace, name)
+		if err != nil {
+			return err
+		}
+
+		phase := ramen.DryRunPhase(drpc.GetAnnotations()[ramen.DryRunAnnotation])
+		if phase == "" {
+			log.Debugf("drpc \"%s/%s\" finished tearing down in %.3f seconds",
+				namespace, name, time.Since(start).Seconds())
+
+			return nil
+		}
+
+		if err := util.Sleep(ctx.Context(), util.RetryInterval); err != nil {
+			return fmt.Errorf("drpc %q is still at dry run phase %q (%s): %w",
+				name, phase, dryRunMessage(drpc), err)
+		}
+	}
 }
 
 // dryRunTargetCluster is the cluster the test copy was built on: the one not
@@ -134,20 +185,6 @@ func setDryRun(ctx types.TestContext, namespace, name string, dryRun bool) error
 	}
 
 	drpc.Spec.DryRun = dryRun
-
-	return updateDRPC(ctx, drpc)
-}
-
-// clearDryRunAnnotation lets another run start. Ramen never clears it: the
-// terminal phase is what stops a second test being started over the first
-// one's leftovers, and leaving it is a deliberate user action.
-func clearDryRunAnnotation(ctx types.TestContext, namespace, name string) error {
-	drpc, err := getDRPC(ctx, namespace, name)
-	if err != nil {
-		return err
-	}
-
-	delete(drpc.Annotations, ramen.DryRunAnnotation)
 
 	return updateDRPC(ctx, drpc)
 }
@@ -225,32 +262,6 @@ func WaitForTestNamespace(ctx types.TestContext, cluster *types.Cluster, name st
 		}
 	}
 }
-
-// deleteTestNamespace removes a namespace Ramen built for a test copy.
-//
-// util.DeleteNamespace is not used: it only deletes namespaces labeled as
-// e2e managed, and these were created by Ramen. Deleting by the dry-run label
-// instead keeps this from ever touching a namespace it did not mean to.
-func deleteTestNamespace(ctx types.TestContext, cluster *types.Cluster, name string) error {
-	namespace := &corev1.Namespace{}
-	if err := cluster.Client.Get(ctx.Context(), k8stypes.NamespacedName{Name: name}, namespace); err != nil {
-		if k8serrors.IsNotFound(err) {
-			return nil
-		}
-
-		return err
-	}
-
-	if _, isTestCopy := namespace.Labels[dryRunNamespaceOfLabel]; !isTestCopy {
-		return fmt.Errorf("refusing to delete namespace %q: it is not a test copy", name)
-	}
-
-	return cluster.Client.Delete(ctx.Context(), namespace)
-}
-
-// dryRunNamespaceOfLabel is set by Ramen on every namespace it builds a test
-// copy in, naming the protected namespace it mirrors.
-const dryRunNamespaceOfLabel = "ramendr.openshift.io/dry-run-namespace-of"
 
 // DryRunRefusedWhileNotCleanedUp checks that a second test failover cannot be
 // started over the first one's leftovers.

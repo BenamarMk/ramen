@@ -92,14 +92,53 @@ func TestDryRunPreemptedByARetargetedFailover(t *testing.T) {
 func TestDryRunHandsOverToARealFailoverOnTheSameCluster(t *testing.T) {
 	// Clearing the flag while asking to fail over to the cluster already
 	// promoted is a promotion, not an abort. Demoting and re-promoting would
-	// be waste in what is most likely an emergency, so the run completes and
-	// lets RunFailover carry on from the already-Primary VRG.
+	// be waste in what is most likely an emergency.
+	//
+	// It steps aside entirely rather than finishing into Completed, which
+	// would read as "tear the copy down" the moment the cleared flag is
+	// seen. A promotion is not a request to delete anything.
 	d := dryRunInstance(rmn.ActionFailover, testTargetCluster)
 	d.instance.Spec.DryRun = false
 
 	phase, yield := d.dryRunShouldYield()
-	if !yield || phase != rmn.DryRunCompleted {
-		t.Errorf("got (%q, %v), want (Completed, true)", phase, yield)
+	if !yield || phase != "" {
+		t.Errorf("got (%q, %v), want (\"\", true)", phase, yield)
+	}
+}
+
+func TestDryRunWantsTheRightThingAtEachPhase(t *testing.T) {
+	for name, tc := range map[string]struct {
+		phase  rmn.DryRunPhase
+		dryRun bool
+		want   bool
+	}{
+		"flag set, nothing started":   {"", true, true},
+		"flag clear, nothing started": {"", false, false},
+		"building":                    {rmn.DryRunSettingUp, true, true},
+		"reverting":                   {rmn.DryRunReverting, true, true},
+		"tearing down":                {rmn.DryRunTearingDown, false, true},
+
+		// The copy is up and being looked at. Nothing to do, and a real
+		// failover must not be blocked by a flag left set.
+		"copy up, flag still set": {rmn.DryRunCompleted, true, false},
+
+		// Clearing the flag from there asks for the copy to go.
+		"copy up, flag cleared": {rmn.DryRunCompleted, false, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			d := dryRunInstance("", "")
+			d.instance.Spec.DryRun = tc.dryRun
+
+			if tc.phase == "" {
+				delete(d.instance.Annotations, rmn.DryRunAnnotation)
+			} else {
+				d.instance.Annotations[rmn.DryRunAnnotation] = string(tc.phase)
+			}
+
+			if got := d.dryRunWants(); got != tc.want {
+				t.Errorf("dryRunWants() = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 

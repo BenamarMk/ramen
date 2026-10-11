@@ -6,13 +6,14 @@ package v1alpha1
 import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 // DryRunAnnotation carries the lifecycle phase of a test failover on the DRPC.
-// Only Ramen writes it, and Ramen never clears it: leaving the terminal phase
-// is a deliberate user action, and is the only gate on starting a second run.
+// Only Ramen writes it. It is present for as long as a test copy exists, and
+// is removed once the copy has been torn down -- which is what gates a second
+// run on the first one being finished with.
 const DryRunAnnotation = "drplacementcontrol.ramendr.openshift.io/dry-run"
 
 // DryRunPhase is the hub-side lifecycle of a test failover, carried in
 // DryRunAnnotation. Absent means no run is in progress and a new one may begin.
-// +kubebuilder:validation:Enum=SettingUp;Reverting;Completed
+// +kubebuilder:validation:Enum=SettingUp;Reverting;Completed;TearingDown
 type DryRunPhase string
 
 const (
@@ -24,9 +25,15 @@ const (
 	// and the test cluster is being returned to Secondary.
 	DryRunReverting = DryRunPhase("Reverting")
 
-	// DryRunCompleted is terminal. The cycle is done and the test copy is left
-	// running for the user to inspect and eventually delete.
+	// DryRunCompleted means the cycle is done and the test copy is running,
+	// waiting for the user to finish looking at it. Clearing spec.dryRun from
+	// here is what asks for it to be taken down.
 	DryRunCompleted = DryRunPhase("Completed")
+
+	// DryRunTearingDown means the user has cleared spec.dryRun and the test
+	// copy is being deleted. The annotation is removed once it is gone, which
+	// is what frees the DRPC to run another test.
+	DryRunTearingDown = DryRunPhase("TearingDown")
 )
 
 // DryRunState is how far the cluster building the test copy has got.

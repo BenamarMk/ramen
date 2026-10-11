@@ -124,11 +124,11 @@ func (d *DRPCInstance) processPlacement() (bool, error) {
 // action. A dry run is a mode of its own: spec.action is neither read to decide
 // what to do nor written, so whatever it holds is left alone.
 //
-// The dryRunFinished guard matters. Without it a DRPC left with dryRun true
+// The dryRunWants guard matters. Without it a DRPC left with dryRun true
 // after a completed test could never perform a real failover, because
 // RunDryRunFailover would keep being called with nothing left to do.
 func (d *DRPCInstance) executeAction() (bool, error) {
-	if d.instance.Spec.DryRun && !d.dryRunFinished() {
+	if d.dryRunWants() {
 		return d.RunDryRunFailover()
 	}
 

@@ -288,3 +288,45 @@ func (v *VRGInstance) dryRunDiscardRestoredPVCs() error {
 
 	return nil
 }
+
+// dryRunTearDown deletes the test copy once the user has finished with it,
+// and clears status.dryRun when it is gone.
+//
+// Clearing the status is how the hub learns the copy is no longer there: it
+// is the same field that says a test copy exists, so emptying it is what
+// frees the DRPC to run another test.
+func (v *VRGInstance) dryRunTearDown() error {
+	if v.dryRunPhase() != ramendrv1alpha1.DryRunTearingDown {
+		return nil
+	}
+
+	if v.instance.Status.DryRun == nil {
+		return nil
+	}
+
+	in, err := v.dryRunInput()
+	if err != nil {
+		return err
+	}
+
+	done, err := dryrun.TearDown(v.ctx, in)
+	if err != nil {
+		return err
+	}
+
+	if !done {
+		v.requeue()
+
+		return nil
+	}
+
+	v.instance.Status.DryRun = nil
+
+	return nil
+}
+
+// dryRunPhase is the lifecycle phase the hub has put this run in, carried on
+// the VRG by the same annotation it sets on the DRPC.
+func (v *VRGInstance) dryRunPhase() ramendrv1alpha1.DryRunPhase {
+	return ramendrv1alpha1.DryRunPhase(v.instance.GetAnnotations()[ramendrv1alpha1.DryRunAnnotation])
+}

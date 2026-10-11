@@ -221,6 +221,13 @@ func (v *VRGInstance) reconcileVolRepsAsSecondary() bool {
 		}
 	}
 
+	// The user has finished with the test copy and asked for it to go.
+	if err := v.dryRunTearDown(); err != nil {
+		v.log.Error(err, "Failed to tear the test copy down")
+
+		return true // Requeue to retry
+	}
+
 	groupPVCs := make(map[types.NamespacedName][]*corev1.PersistentVolumeClaim)
 
 	v.log.Info(fmt.Sprintf("Reconciling VolRep as Secondary. %d VolRepPVCs", len(v.volRepPVCs)))
@@ -1463,7 +1470,7 @@ func (v *VRGInstance) autoResync(state volrep.ReplicationState) bool {
 	// that even when the run never got far enough to write status. Being
 	// wrong in the permissive direction costs a resync that was not needed;
 	// being wrong the other way leaves volumes diverged.
-	dryRunPhase := ramendrv1alpha1.DryRunPhase(v.instance.GetAnnotations()[ramendrv1alpha1.DryRunAnnotation])
+	dryRunPhase := v.dryRunPhase()
 	if dryRunPhase != "" {
 		v.log.Info("AutoResync enabled: a test failover promoted this cluster's volumes",
 			"action", v.instance.Spec.Action, "dryRunPhase", dryRunPhase)

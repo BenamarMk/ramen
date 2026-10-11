@@ -31,7 +31,8 @@ user to inspect.
   the Ramen ops namespace (`isDiscoveredApp`, `drplacementcontrol.go:1074`).
 - One generated test namespace per protected namespace, with the application's
   PVCs and kube objects restored into it.
-- The test copy survives the automatic revert and is torn down manually.
+- The test copy survives the automatic revert and runs until the user
+  clears `spec.dryRun`, which takes it down — decision 38.
 
 ### Deferred to a later release
 
@@ -44,7 +45,6 @@ user to inspect.
 - Detecting that a previous run's test namespaces were never cleaned up
   (§5.10, decision 20).
 - Demoting volumes before the test copy is built (§12, decision 19).
-- Any cleanup of the test application. Teardown is manual, by design.
 
 ### Out of scope entirely
 
@@ -155,7 +155,8 @@ code selects on.
 | 5  | `includeClusterResources` stays **true**; consequences in §12        |
 | 6  | Ramen is granted **RBAC write** on the managed cluster, §6           |
 | 7  | A run that cannot proceed **stays stuck**; no automatic failure      |
-| 8  | A second dry run is gated only by the **annotation**, §5.10          |
+| 8  | A second dry run is gated by the **annotation**, which Ramen removes |
+|    | once the copy is torn down, §5.3                                     |
 | 9  | Managed-cluster logic lives in a **separate package**, §5.1          |
 | 10 | The two S3 naming helpers are **shared, not duplicated**, §5.1       |
 | 11 | Recipe hooks are **skipped** during a test restore, §5.8             |
@@ -196,6 +197,8 @@ code selects on.
 |    | §5.7.1. Guarded on `status.dryRun`, never on the annotation         |
 | 37 | **Auto-resync stays on through every dry-run phase**, including    |
 |    | the terminal one, §5.7.2                                            |
+| 38 | Clearing `spec.dryRun` **tears the test copy down**, and Ramen then |
+|    | removes its own annotation, §5.3.1. Supersedes manual teardown      |
 
 ## 4. Current Implementation
 
@@ -545,7 +548,7 @@ retarget itself if cluster roles shift underneath it.
 
 ```
 drplacementcontrol.ramendr.openshift.io/dry-run:
-    SettingUp | Reverting | Completed
+    SettingUp | Reverting | Completed | TearingDown
 ```
 
 | Value       | Meaning                                                     |
@@ -553,7 +556,8 @@ drplacementcontrol.ramendr.openshift.io/dry-run:
 | *(absent)*  | no dry run in progress; a new one may begin                  |
 | `SettingUp` | test cluster promoted, test copy being built — or stalled    |
 | `Reverting` | test copy ready or abandoned; peer returning to Secondary    |
-| `Completed` | cycle finished; test copy running; **further runs refused**  |
+| `Completed`   | cycle finished; test copy running, waiting on the user     |
+| `TearingDown` | the user cleared the flag; the copy is being deleted       |
 
 ```
   absent ──user: dryRun=true, pre-flight passes──► SettingUp
@@ -583,6 +587,40 @@ already depends on this). **This propagation is currently broken — see §7.**
 
 `ProgressionTestingFailover` is no longer set; the constant remains in
 `api/v1alpha1` marked deprecated.
+
+#### 5.3.1 Tearing the copy down — [from implementation]
+
+Earlier drafts left the test copy to the user: Ramen never cleared the
+annotation, and deleting the namespaces was a manual step the release notes
+had to warn about. That put two chores on the user after every run, and made
+the repeat-run hazard of §12 something they had to remember rather than
+something the system prevented.
+
+Clearing `spec.dryRun` now means "I am finished with the copy". From
+`Completed` that moves the run to `TearingDown`; the test cluster deletes the
+namespaces, with the restored workload, its PVCs and its snapshots inside
+them; and Ramen removes its own annotation once they are gone, which is what
+frees the DRPC to run another test.
+
+So the flag reads the same at both ends: setting it asks for a copy, clearing
+it gives the copy back. Nothing is left for the user to tidy, and a second run
+cannot start over the first one's leftovers, because the leftovers go before
+the annotation does.
+
+Three details that are not obvious:
+
+- **The test cluster does the deleting.** The namespaces are there, not on the
+  hub. It reports being finished by emptying its own `status.dryRun`, the same
+  field that says a copy exists.
+- **The phase has to be pushed to a Secondary VRG.** By tear-down time the
+  test cluster has been demoted, and neither `ensureVRGManifestWork` (which
+  refuses a VRG that is not Primary) nor `updateVRGState` (which returns early
+  when the state already matches) will carry an annotation change there.
+  `refreshVRGAnnotations` exists for that one job.
+- **A promotion is not a tear-down.** Handing over to a real failover (§5.9)
+  clears the annotation outright rather than finishing into `Completed`, which
+  would read as a delete request the moment the cleared flag was seen. The copy
+  keeps running alongside the now real workload.
 
 ### 5.4 Interaction with real DR actions and deletion
 
@@ -1251,18 +1289,15 @@ new hub plumbing. The `dryrun` package is a stepping stone.
 
 ## 12. Known Limitations
 
-- **A repeat run over uncleaned namespaces silently reuses the old test copy.**
-  Every create in the chain treats `AlreadyExists` as success and Velero skips
-  existing objects (§4.1), so run 2 adopts run 1's namespace, its imported VSC
-  — still pointing at run 1's snapshot handle — and its already-bound PVC, then
-  reports `Completed`. The user is shown a test copy containing the previous
-  run's data, with nothing in the logs to say so. There is also a storage leak:
-  run 2's fresh snapshot is retained by `HandOff` but never adopted by an
-  imported VSC, leaving one orphaned storage snapshot per PVC per repeat run.
-  This is the consequence of decision 20 and belongs in the release notes. The
-  cheapest tightening, if wanted later, is to compare the adopted VSC's
-  `source.snapshotHandle` against the current source snapshot's handle and
-  stall when they differ.
+- **A repeat run over uncleaned namespaces would silently reuse the old test
+  copy** — but it can no longer arise in the normal flow. Every create in the
+  chain treats `AlreadyExists` as success and Velero skips existing objects
+  (§4.1), so a second run over a first one's namespaces would adopt them and
+  report `Completed` over stale data. Decision 38 removes the opening: the
+  namespaces are deleted before the annotation is, and the annotation gates
+  the next run. It remains reachable only by deleting the annotation by hand
+  while leaving the namespaces, which nothing in the documented flow asks
+  anyone to do.
 - **A stalled run holds the test cluster promoted indefinitely.** With no
   timeout and no failure state (decisions 13, 21), a dry run that cannot
   complete keeps the peer Primary and mirroring stopped until a human notices.
