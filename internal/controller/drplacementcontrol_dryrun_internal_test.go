@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	volrep "github.com/csi-addons/kubernetes-csi-addons/api/replication.storage/v1alpha1"
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -544,5 +545,59 @@ func TestDryRunOnlyDiscardsProtectedNamespaces(t *testing.T) {
 
 	if !pvcExists(t, c, "somebody-elses-namespace", "pvc-1") {
 		t.Error("deleted a PVC outside the namespaces this run restored into")
+	}
+}
+
+func autoResyncInstance(phase rmn.DryRunPhase, action rmn.VRGAction) *VRGInstance {
+	annotations := map[string]string{}
+	if phase != "" {
+		annotations[rmn.DryRunAnnotation] = string(phase)
+	}
+
+	return &VRGInstance{
+		log: logr.Discard(),
+		instance: &rmn.VolumeReplicationGroup{
+			ObjectMeta: metav1.ObjectMeta{Annotations: annotations},
+			Spec:       rmn.VolumeReplicationGroupSpec{Action: action},
+		},
+	}
+}
+
+func TestAutoResyncAfterATestFailoverPromotedTheVolumes(t *testing.T) {
+	// A test failover promotes this cluster's volumes to snapshot them, and
+	// that divergence is what makes a resync necessary. The need outlives
+	// the run: the cluster only reaches Completed once it is already
+	// Secondary, so treating that phase as "over" would switch auto-resync
+	// off at the exact moment it is wanted.
+	for _, phase := range []rmn.DryRunPhase{
+		rmn.DryRunSettingUp, rmn.DryRunReverting, rmn.DryRunCompleted,
+	} {
+		t.Run(string(phase), func(t *testing.T) {
+			v := autoResyncInstance(phase, "")
+
+			if !v.autoResync(volrep.Secondary) {
+				t.Errorf("auto-resync disabled at phase %q, leaving the volumes diverged", phase)
+			}
+		})
+	}
+}
+
+func TestAutoResyncNeedsSecondary(t *testing.T) {
+	// Nothing to resync while this cluster is still the one being written to.
+	v := autoResyncInstance(rmn.DryRunReverting, "")
+
+	if v.autoResync(volrep.Primary) {
+		t.Error("auto-resync enabled on a Primary")
+	}
+}
+
+func TestAutoResyncUnchangedWithoutADryRun(t *testing.T) {
+	// The pre-existing rule still holds where no test failover was involved.
+	if v := autoResyncInstance("", rmn.VRGActionFailover); !v.autoResync(volrep.Secondary) {
+		t.Error("auto-resync disabled for a real failover")
+	}
+
+	if v := autoResyncInstance("", rmn.VRGActionRelocate); v.autoResync(volrep.Secondary) {
+		t.Error("auto-resync enabled for a relocate with no test failover")
 	}
 }

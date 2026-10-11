@@ -1435,11 +1435,10 @@ func (v *VRGInstance) createOrUpdateVR(vrNamespacedName types.NamespacedName,
 	return v.updateVR(pvc, volRep, state, log)
 }
 
-// autoResync determines if automatic resynchronization should be enabled for VolumeReplication.
-// It returns true when:
-//   - The replication state is Secondary, AND
-//   - Either: test failover annotation is present (includes cleanup phase)
-//   - Or: VRG action is Failover
+// autoResync determines if automatic resynchronization should be enabled for
+// VolumeReplication. It returns true when the replication state is Secondary
+// and either a test failover touched this cluster, or the VRG action is
+// Failover.
 func (v *VRGInstance) autoResync(state volrep.ReplicationState) bool {
 	if state != volrep.Secondary {
 		v.log.Info("AutoResync disabled: replication state is not Secondary",
@@ -1448,18 +1447,26 @@ func (v *VRGInstance) autoResync(state volrep.ReplicationState) bool {
 		return false
 	}
 
-	// Check the dry-run annotation FIRST (before the action check). A test
-	// failover must auto-resync while it holds this cluster Primary and
-	// through the revert, so replication catches up as soon as the volumes
-	// are demoted. The annotation is terminal at Completed; any phase before
-	// that means a run is still live.
+	// Check the dry-run annotation FIRST, before the action check.
+	//
+	// Any phase counts, including the terminal one. A test failover promotes
+	// this cluster's volumes in order to snapshot them, and that divergence
+	// is what makes a resync necessary -- the need outlives the run that
+	// caused it. The cluster only reaches Completed after it is already
+	// Secondary, so treating that phase as "over" would switch auto-resync
+	// off at the exact moment it is wanted.
+	//
+	// This guard is deliberately looser than the one in
+	// dryRunDiscardRestoredPVCs, which has to know which cluster built the
+	// test copy and keys on status.dryRun for it. The question here is only
+	// "were these volumes promoted by a test", and the annotation answers
+	// that even when the run never got far enough to write status. Being
+	// wrong in the permissive direction costs a resync that was not needed;
+	// being wrong the other way leaves volumes diverged.
 	dryRunPhase := ramendrv1alpha1.DryRunPhase(v.instance.GetAnnotations()[ramendrv1alpha1.DryRunAnnotation])
-	isTestFailover := dryRunPhase != "" && dryRunPhase != ramendrv1alpha1.DryRunCompleted
-
-	if isTestFailover {
-		v.log.Info("AutoResync enabled for test failover/cleanup",
-			"action", v.instance.Spec.Action,
-			"reason", "test failover annotation present")
+	if dryRunPhase != "" {
+		v.log.Info("AutoResync enabled: a test failover promoted this cluster's volumes",
+			"action", v.instance.Spec.Action, "dryRunPhase", dryRunPhase)
 
 		return true
 	}

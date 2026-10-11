@@ -193,7 +193,9 @@ code selects on.
 | 34 | The two-Primary window is accepted, budgeted at **~5 minutes**, §12  |
 | 35 | The legacy dry-run annotations are **deleted**, not carried, §8.1   |
 | 36 | The revert **deletes the PVCs step ① restored**; nothing else will, |
-|    | §5.7. Guarded on `status.dryRun`, never on the annotation           |
+|    | §5.7.1. Guarded on `status.dryRun`, never on the annotation         |
+| 37 | **Auto-resync stays on through every dry-run phase**, including    |
+|    | the terminal one, §5.7.2                                            |
 
 ## 4. Current Implementation
 
@@ -953,6 +955,25 @@ volumes, so the discard is skipped when the VRG is staying Primary.
 The VRG *deletion* path deliberately does not discard them. Deleting a DRPC
 normally preserves PVCs, and whether dry-run leftovers should be an exception
 is a separate decision — see §13.
+
+#### 5.7.2 Auto-resync outlives the run — [from implementation]
+
+A test failover promotes the test cluster's volumes in order to snapshot
+them, and that divergence is what makes a resync necessary afterwards. The
+need outlives the run that caused it.
+
+`autoResync` therefore treats **any** dry-run phase as grounds to enable it,
+the terminal one included. The cluster only reaches `Completed` once it is
+already Secondary -- the hub sets that phase after `EnsureCleanup` confirms
+the demote -- so treating `Completed` as "over" switched auto-resync off at
+the exact moment it was wanted, leaving the volumes diverged.
+
+This guard is deliberately looser than §5.7.1's. That one has to know which
+cluster built the test copy, and keys on `status.dryRun` for it. This one
+only asks whether these volumes were promoted by a test, and the annotation
+answers that even for a run that never got far enough to write status. Being
+wrong permissively costs a resync that was not needed; being wrong the other
+way leaves volumes diverged, so the two guards should not be unified.
 
 ### 5.10 Eligibility and pre-flight guards
 
