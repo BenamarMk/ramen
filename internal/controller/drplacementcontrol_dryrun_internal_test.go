@@ -94,9 +94,9 @@ func TestDryRunHandsOverToARealFailoverOnTheSameCluster(t *testing.T) {
 	// promoted is a promotion, not an abort. Demoting and re-promoting would
 	// be waste in what is most likely an emergency.
 	//
-	// It steps aside entirely rather than finishing into Completed, which
-	// would read as "tear the copy down" the moment the cleared flag is
-	// seen. A promotion is not a request to delete anything.
+	// It steps aside entirely rather than finishing into Ready, which would
+	// read as "tear the copy down" the moment the cleared flag is seen. A
+	// promotion is not a request to delete anything.
 	d := dryRunInstance(rmn.ActionFailover, testTargetCluster)
 	d.instance.Spec.DryRun = false
 
@@ -120,10 +120,10 @@ func TestDryRunWantsTheRightThingAtEachPhase(t *testing.T) {
 
 		// The copy is up and being looked at. Nothing to do, and a real
 		// failover must not be blocked by a flag left set.
-		"copy up, flag still set": {rmn.DryRunCompleted, true, false},
+		"copy up, flag still set": {rmn.DryRunReady, true, false},
 
 		// Clearing the flag from there asks for the copy to go.
-		"copy up, flag cleared": {rmn.DryRunCompleted, false, true},
+		"copy up, flag cleared": {rmn.DryRunReady, false, true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			d := dryRunInstance("", "")
@@ -605,11 +605,11 @@ func autoResyncInstance(phase rmn.DryRunPhase, action rmn.VRGAction) *VRGInstanc
 func TestAutoResyncAfterATestFailoverPromotedTheVolumes(t *testing.T) {
 	// A test failover promotes this cluster's volumes to snapshot them, and
 	// that divergence is what makes a resync necessary. The need outlives
-	// the run: the cluster only reaches Completed once it is already
-	// Secondary, so treating that phase as "over" would switch auto-resync
-	// off at the exact moment it is wanted.
+	// the run: the cluster only reaches Ready once it is already Secondary,
+	// so treating that phase as "over" would switch auto-resync off at the
+	// exact moment it is wanted.
 	for _, phase := range []rmn.DryRunPhase{
-		rmn.DryRunSettingUp, rmn.DryRunReverting, rmn.DryRunCompleted,
+		rmn.DryRunSettingUp, rmn.DryRunReverting, rmn.DryRunReady,
 	} {
 		t.Run(string(phase), func(t *testing.T) {
 			v := autoResyncInstance(phase, "")

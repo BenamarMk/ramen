@@ -111,7 +111,7 @@ user to inspect.
       │
       │ target VRG confirmed Secondary
       │ PeerReady = true
-      │ annotate  dry-run: Completed      ← terminal
+      │ annotate  dry-run: Ready      ← terminal
       ▼
  DRPC status lists the test namespaces. The copy runs until the user
  clears spec.dryRun, which deletes it and removes the annotation --
@@ -166,7 +166,7 @@ selects on.
 | 16  | CephFS workloads are **refused**, for the same reason as VolSync     |
 | 17  | DRPC deleted mid-run **leaves the test copy**; no new finalizer,     |
 |     | but the VRG delete path must run `HandOff`, §5.4                     |
-| 18  | States are `SettingUp → Reverting → Completed`, §5.3                 |
+| 18  | States are `SettingUp → Reverting → Ready → TearingDown`, §5.3       |
 | 19  | Volumes stay promoted for the whole build; RPO window accepted       |
 | 20  | `runID` is **derived from the DRPC UID**, so every run on a DRPC     |
 |     | targets the same namespaces. Safe because decision 38 deletes them   |
@@ -202,6 +202,9 @@ selects on.
 | 39  | A **`priority=2` `dryRun` printer column** reads the annotation,     |
 |     | not `status.dryRun`, §5.9.3 — the lifecycle is what a passer-by      |
 |     | needs, and it is absent when no test copy exists                     |
+| 40  | The terminal phase is **`Ready`**, not `Completed`, §5.3 — the       |
+|     | orchestration finished but the test did not, and `Completed`         |
+|     | already names two other things in this feature                       |
 
 ## 4. Current Implementation
 
@@ -420,7 +423,7 @@ func (d *DRPCInstance) executeAction() (bool, error) {
 }
 ```
 
-`dryRunFinished()` is `annotation == Completed` (decision 29). Without it a DRPC
+`dryRunFinished()` is `annotation == Ready` (decision 29). Without it a DRPC
 left with `dryRun: true` after a completed test could never perform a real
 failover — `executeAction` would keep returning to a `RunDryRunFailover` that
 has nothing left to do. The consequence is that `spec.dryRun` alone is not the
@@ -436,7 +439,7 @@ func (d *DRPCInstance) RunDryRunFailover() (bool, error) {
     case "":                      return d.dryRunStart()
     case rmn.DryRunSettingUp:     return d.dryRunBuild()
     case rmn.DryRunReverting:     return d.dryRunRevert()
-    case rmn.DryRunCompleted:     return done, nil
+    case rmn.DryRunReady:     return done, nil
     }
 }
 ```
@@ -497,7 +500,7 @@ if err := d.EnsureCleanup(homeCluster); err != nil {
     return !done, nil                      // still waiting for Secondary
 }
 
-d.setDryRunState(rmn.DryRunCompleted)
+d.setDryRunPhase(rmn.DryRunReady)
 d.instance.Status.DryRun.CompletionTime = now()
 return done, nil
 ```
@@ -535,11 +538,11 @@ retarget itself if cluster roles shift underneath it.
 
 #### 5.2.2 Conditions during a dry run
 
-- **`PeerReady`** → `False` for the duration, `True` again at `Completed`. This
-  is factually correct — the peer is Primary and unavailable as a failover
-  target — and it makes the existing action-gating logic protect the dry run
-  without any new checks. Only the `False` needs writing: `EnsureCleanup`
-  restores it to `True` as part of the revert.
+- **`PeerReady`** → `False` for the duration, `True` again at `Ready`. This is
+  factually correct — the peer is Primary and unavailable as a failover target —
+  and it makes the existing action-gating logic protect the dry run without any
+  new checks. Only the `False` needs writing: `EnsureCleanup` restores it to
+  `True` as part of the revert.
 - **`Available`** and **`Protected`** are **not** touched. They describe the
   real action and the real workload, neither of which changes.
 - Dry-run progress and any stall reason go to `status.dryRun` (§5.9), never to
@@ -549,16 +552,16 @@ retarget itself if cluster roles shift underneath it.
 
 ```
 drplacementcontrol.ramendr.openshift.io/dry-run:
-    SettingUp | Reverting | Completed | TearingDown
+    SettingUp | Reverting | Ready | TearingDown
 ```
 
-| Value         | Meaning                                                   |
-| ------------- | --------------------------------------------------------- |
-| *(absent)*    | no dry run in progress; a new one may begin               |
-| `SettingUp`   | test cluster promoted, test copy being built — or stalled |
-| `Reverting`   | test copy ready or abandoned; peer returning to Secondary |
-| `Completed`   | cycle finished; test copy running, waiting on the user    |
-| `TearingDown` | the user cleared the flag; the copy is being deleted      |
+| Value         | Meaning                                                    |
+| ------------- | ---------------------------------------------------------- |
+| *(absent)*    | no dry run in progress; a new one may begin                |
+| `SettingUp`   | test cluster promoted, test copy being built — or stalled  |
+| `Reverting`   | test copy built or abandoned; peer returning to Secondary  |
+| `Ready`       | copy built and running; Ramen is done, waiting on the user |
+| `TearingDown` | the user cleared the flag; the copy is being deleted       |
 
 ```
   absent ──user: dryRun=true, pre-flight passes──► SettingUp
@@ -570,7 +573,7 @@ drplacementcontrol.ramendr.openshift.io/dry-run:
                                                       │
                       target VRG confirmed Secondary  │
                                                       ▼
-                                                  Completed
+                                                  Ready
                                                       │
                       user: dryRun = false            │
                                                       ▼
@@ -584,6 +587,25 @@ drplacementcontrol.ramendr.openshift.io/dry-run:
 Only Ramen writes this annotation. It is present for as long as a test copy
 exists and is removed once the copy has been torn down, which is what gates a
 second run on the first being finished with (decision 8, §5.3.1).
+
+The terminal phase is `Ready`, not `Completed` (decision 40). `Completed`
+described Ramen's orchestration, but a reader applies it to the test — and the
+test has emphatically not finished: the copy runs until someone takes it down,
+which is the entire point of the feature. The word was also already doing two
+other jobs here. `ProgressionCompleted` sits in the column immediately left of
+`dryRun` under `-o wide`, and `DryRunBuildCompleted` is `status.dryRun.state`;
+three different `Completed`s, two of them visible in the same row.
+
+`Running` was considered and rejected for the mirror-image fault. The printer
+column is headed `dryRun`, so the cell reads as a predicate of the run itself,
+and `DRYRUN: Running` parses as "Ramen is still working" — which would leave a
+user waiting for something that will never happen without them. `Ready` survives
+both readings: the run is ready, and so is the copy it produced.
+
+Note the grammatical break. `SettingUp`, `Reverting` and `TearingDown` are
+gerunds naming what Ramen is doing; `Ready` is an adjective naming a resulting
+state. That is deliberate — it is the one phase in which Ramen has stopped, and
+the odd-one-out phase should look odd.
 
 The annotation is propagated to the test VRG so the managed cluster can
 distinguish a dry run from a real failover (`autoResync`, `vrg_volrep.go:1451`,
@@ -600,7 +622,7 @@ to warn about. That put two chores on the user after every run, and made the
 repeat-run hazard of §12 something they had to remember rather than something
 the system prevented.
 
-Clearing `spec.dryRun` now means "I am finished with the copy". From `Completed`
+Clearing `spec.dryRun` now means "I am finished with the copy". From `Ready`
 that moves the run to `TearingDown`; the test cluster deletes the namespaces,
 with the restored workload, its PVCs and its snapshots inside them; and Ramen
 removes its own annotation once they are gone, which is what frees the DRPC to
@@ -622,9 +644,9 @@ Three details that are not obvious:
   state already matches) will carry an annotation change there.
   `refreshVRGAnnotations` exists for that one job.
 - **A promotion is not a tear-down.** Handing over to a real failover (§5.11)
-  clears the annotation outright rather than finishing into `Completed`, which
-  would read as a delete request the moment the cleared flag was seen. The copy
-  keeps running alongside the now real workload.
+  clears the annotation outright rather than finishing into `Ready`, which would
+  read as a delete request the moment the cleared flag was seen. The copy keeps
+  running alongside the now real workload.
 
 ### 5.4 Interaction with real DR actions and deletion
 
@@ -644,7 +666,7 @@ when the user retargets `failoverCluster` at a genuine disaster.
 - **`dryRun` cleared mid-run, action wants a failover to the test cluster** —
   **hand over** to `RunFailover`
 - **`dryRun` cleared mid-run, anything else** — **abort** → `Reverting`
-- **Real action requested after `Completed`** — runs normally, via
+- **Real action requested after `Ready`** — runs normally, via
   `dryRunFinished()`
 - **DRPC deleted mid-run** — the existing finalizer drains both VRGs; `HandOff`
   runs first
@@ -654,15 +676,15 @@ building jumps straight to `Reverting`, abandoning a half-built test copy in
 order to free the peer as quickly as possible.
 `updateVRGState(target, Secondary)` still clears `DryRun`, so `HandOff` still
 runs and whatever test namespaces and volumes exist survive as debris. Once
-`Completed` is reached, `dryRunFinished()` lets the real action through on the
-next reconcile.
+`Ready` is reached, `dryRunFinished()` lets the real action through on the next
+reconcile.
 
 **Hand over to a real failover** (decision 31). If the user clears `spec.dryRun`
 and `spec.action` is `Failover` resolving to the cluster the dry run promoted,
 demoting and re-promoting would be pure waste in what is probably an emergency.
-Instead the dry-run path finishes immediately: set the annotation to
-`Completed`, clear `DryRun` on the test VRG so `HandOff` transfers the
-snapshots, and let `executeAction` fall through. `RunFailover`'s first branch is
+Instead the dry-run path finishes immediately: set the annotation to `Ready`,
+clear `DryRun` on the test VRG so `HandOff` transfers the snapshots, and let
+`executeAction` fall through. `RunFailover`'s first branch is
 `vrgExistsAndPrimary(failoverCluster)` (`drplacementcontrol.go:455`), which is
 already true, so it proceeds directly to `ensureActionTransition` — cleaning up
 the source cluster and moving Placement as a real failover should. The in-place
@@ -672,8 +694,8 @@ kube object restore runs for the first time, because the dry run never set
 **No second pre-emption path** (decision 33). Yielding only ever happens from
 `SettingUp`. A real action arriving once the run is already `Reverting` simply
 waits: the peer is being freed as fast as it can be, there is nothing to
-accelerate, and `dryRunFinished()` lets the action through the moment
-`Completed` is reached.
+accelerate, and `dryRunFinished()` lets the action through the moment `Ready` is
+reached.
 
 **Abort.** If `spec.dryRun` is cleared with any other action — empty, or
 `Relocate` — the dry run goes to `Reverting` rather than being abandoned. This
@@ -1006,10 +1028,10 @@ and that divergence is what makes a resync necessary afterwards. The need
 outlives the run that caused it.
 
 `autoResync` therefore treats **any** dry-run phase as grounds to enable it, the
-terminal one included. The cluster only reaches `Completed` once it is already
+terminal one included. The cluster only reaches `Ready` once it is already
 Secondary -- the hub sets that phase after `EnsureCleanup` confirms the demote
--- so treating `Completed` as "over" switched auto-resync off at the exact
-moment it was wanted, leaving the volumes diverged.
+-- so treating `Ready` as "over" switched auto-resync off at the exact moment it
+was wanted, leaving the volumes diverged.
 
 This guard is deliberately looser than §5.9.1's. That one has to know which
 cluster built the test copy, and keys on `status.dryRun` for it. This one only
@@ -1035,7 +1057,7 @@ annotation, not `status.dryRun`:
 
 Three properties made the annotation the right source. It is the state of record
 (§5.3), so the column cannot disagree with the machine that drives the run. Its
-four values -- `SettingUp`, `Reverting`, `Completed`, `TearingDown` -- are a
+four values -- `SettingUp`, `Reverting`, `Ready`, `TearingDown` -- are a
 lifecycle rather than the build progress `status.dryRun.state` carries, and
 lifecycle is what a passer-by needs. And it is present for exactly as long as a
 test copy exists, which is the question being asked.
@@ -1077,7 +1099,7 @@ failing with a condition and an event, leaving the DRPC untouched:
 - **No VolSync.** Refuse if any `ProtectedPVC.ProtectedByVolSync` is true in the
   current primary's VRG status.
 - **Annotation absent.** Refuse if the dry-run annotation is present in any
-  state, including `Completed`. This is the only gate on repeat runs.
+  state, including `Ready`. This is the only gate on repeat runs.
 - **Target resolvable.** A peer that is not the current Primary must exist.
 - **No truncation collision.** Refuse if two protected namespaces map to the
   same target name (§5.5).
@@ -1109,7 +1131,7 @@ missing, which is worse than a clear refusal.
 
 ### 5.11 Promotion instead of revert
 
-From `Completed` the user may clear `dryRun` but **leave** `action: Failover`
+From `Ready` the user may clear `dryRun` but **leave** `action: Failover`
 pointing at the cluster the test promoted. That is the existing
 promote-to-real-failover path and it stays supported:
 
@@ -1121,9 +1143,9 @@ promote-to-real-failover path and it stays supported:
 - `dryrun.HandOff` runs here too, so the test copy keeps its volumes.
 - The PVCs step ① restored are **kept**, not discarded (§5.9.1): they stop being
   a test copy's scaffolding and become the workload's own volumes.
-- The annotation is cleared outright rather than moved to `Completed`, which
-  would read as a tear-down request the moment the cleared flag was seen
-  (§5.3.1). The test copy keeps running alongside the now real workload.
+- The annotation is cleared outright rather than moved to `Ready`, which would
+  read as a tear-down request the moment the cleared flag was seen (§5.3.1). The
+  test copy keeps running alongside the now real workload.
 
 Whether a promotion *should* also take the test copy down is deliberately left
 as it is: deleting a copy during what is most likely an emergency is not
@@ -1213,8 +1235,9 @@ annotations is load-bearing for real DR and must survive.
   `DRPCTestFailoverDryRunAnnotationValueTrue` (`:49`) — superseded by the
   three-state annotation. All nine uses go. Note that `autoResync`
   (`vrg_volrep.go:1451`) is one of them: it must be repointed at the new
-  annotation, and its `== "true"` comparison becomes "present and not
-  `Completed`".
+  annotation, and its `== "true"` comparison becomes "present at all" — see
+  §5.9.2, which corrects an earlier draft of this line that excluded the
+  terminal phase.
 - `DRPCLastAction` (`:52`) — written in `ensurePlacement` (`:2056`) and read in
   exactly one place, the log line at `:177` inside
   `processTestFailoverFlowIfEnabled`, which is itself deleted. It is write-only
@@ -1362,7 +1385,7 @@ new hub plumbing. The `dryrun` package is a stepping stone.
   copy** — but it can no longer arise in the normal flow. Every create in the
   chain treats `AlreadyExists` as success and Velero skips existing objects
   (§4.1), so a second run over a first one's namespaces would adopt them and
-  report `Completed` over stale data. Decision 38 removes the opening: the
+  report success over stale data. Decision 38 removes the opening: the
   namespaces are deleted before the annotation is, and the annotation gates the
   next run. It remains reachable only by deleting the annotation by hand while
   leaving the namespaces, which nothing in the documented flow asks anyone to

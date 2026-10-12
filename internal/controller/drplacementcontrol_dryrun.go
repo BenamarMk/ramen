@@ -26,8 +26,10 @@ import (
 //   - the test copy is left running afterwards for the user to inspect
 //
 // The whole lifecycle is driven by rmn.DryRunAnnotation on the DRPC. Only
-// Ramen writes it and Ramen never clears it: leaving the terminal phase is a
-// deliberate user action, and is the only gate on starting a second run.
+// Ramen writes it, and the annotation is present for exactly as long as a test
+// copy exists -- which is the only gate on starting a second run. Ready is
+// terminal until the user clears spec.dryRun; Ramen removes the annotation
+// itself once the copy it describes is gone.
 //
 //	absent ──user sets dryRun, pre-flight passes──► SettingUp
 //	                                                   │
@@ -36,9 +38,12 @@ import (
 //	                                                Reverting
 //	                                                   │
 //	                       peer confirmed Secondary    ▼
-//	                                                Completed  (terminal)
+//	                                                 Ready  (the copy is the
+//	                                                   │      user's until they
+//	                           user clears dryRun      ▼      clear the flag)
+//	                                               TearingDown
 //	                                                   │
-//	                       user deletes the annotation ▼
+//	                         test copy deleted         ▼
 //	                                                absent
 
 const dryRunConditionReason = "DryRunTestFailover"
@@ -85,18 +90,17 @@ func (d *DRPCInstance) setDryRunPhase(phase rmn.DryRunPhase) error {
 
 // dryRunWants reports whether the dry-run path has anything to do.
 //
-// The interesting case is Completed, where a test copy is up and waiting to
-// be looked at. With the flag still set there is nothing to do and real
-// actions must pass through -- a stale flag cannot be allowed to block a
-// failover. Clearing the flag from there is what asks for the copy to be
-// taken down.
+// The interesting case is Ready, where a test copy is up and waiting to be
+// looked at. With the flag still set there is nothing to do and real actions
+// must pass through -- a stale flag cannot be allowed to block a failover.
+// Clearing the flag from there is what asks for the copy to be taken down.
 func (d *DRPCInstance) dryRunWants() bool {
 	// Every other phase is a run already under way.
 	//nolint:exhaustive
 	switch d.dryRunPhase() {
 	case "":
 		return d.instance.Spec.DryRun
-	case rmn.DryRunCompleted:
+	case rmn.DryRunReady:
 		return !d.instance.Spec.DryRun
 	default:
 		return true
@@ -122,9 +126,9 @@ func (d *DRPCInstance) RunDryRunFailover() (bool, error) {
 		return d.dryRunRevert()
 	case rmn.DryRunTearingDown:
 		return d.dryRunTearDown()
-	case rmn.DryRunCompleted:
-		// The copy is up. dryRunWants only routes here from Completed once
-		// the flag has been cleared, which asks for the copy to go.
+	case rmn.DryRunReady:
+		// The copy is up. dryRunWants only routes here from Ready once the
+		// flag has been cleared, which asks for the copy to go.
 		d.log.Info("Dry run tearing the test copy down")
 
 		return !done, d.setDryRunPhase(rmn.DryRunTearingDown)
@@ -413,7 +417,7 @@ func (d *DRPCInstance) dryRunRevert() (bool, error) {
 		return !done, nil
 	}
 
-	if err := d.setDryRunPhase(rmn.DryRunCompleted); err != nil {
+	if err := d.setDryRunPhase(rmn.DryRunReady); err != nil {
 		return !done, err
 	}
 
@@ -451,7 +455,7 @@ func (d *DRPCInstance) dryRunShouldYield() (rmn.DryRunPhase, bool) {
 			d.log.Info("Dry run handing over to a real failover on the cluster it already promoted",
 				"cluster", status.TargetCluster)
 
-			// Step aside entirely rather than finishing into Completed, which
+			// Step aside entirely rather than finishing into Ready, which
 			// would read as "tear the copy down" the moment the flag is seen
 			// clear. A promotion is not a request to delete anything, and the
 			// copy keeps running alongside the now real workload.

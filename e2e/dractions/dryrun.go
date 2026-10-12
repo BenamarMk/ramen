@@ -46,7 +46,7 @@ func DryRun(ctx types.TestContext) (map[string]string, error) {
 		return nil, err
 	}
 
-	if err := waitDryRunPhase(ctx, managementNamespace, name, ramen.DryRunCompleted); err != nil {
+	if err := waitDryRunPhase(ctx, managementNamespace, name, ramen.DryRunReady); err != nil {
 		return nil, err
 	}
 
@@ -281,9 +281,9 @@ func DryRunRefusedWhileNotCleanedUp(ctx types.TestContext) error {
 	}
 
 	phase := ramen.DryRunPhase(drpc.GetAnnotations()[ramen.DryRunAnnotation])
-	if phase != ramen.DryRunCompleted {
+	if phase != ramen.DryRunReady {
 		return fmt.Errorf("expected drpc %q to be left at %q, found %q",
-			name, ramen.DryRunCompleted, phase)
+			name, ramen.DryRunReady, phase)
 	}
 
 	if err := setDryRun(ctx, managementNamespace, name, true); err != nil {
@@ -307,7 +307,7 @@ func DryRunRefusedWhileNotCleanedUp(ctx types.TestContext) error {
 		return err
 	}
 
-	if phase := ramen.DryRunPhase(drpc.GetAnnotations()[ramen.DryRunAnnotation]); phase != ramen.DryRunCompleted {
+	if phase := ramen.DryRunPhase(drpc.GetAnnotations()[ramen.DryRunAnnotation]); phase != ramen.DryRunReady {
 		return fmt.Errorf("a second test failover started over the first one's leftovers: phase is %q", phase)
 	}
 

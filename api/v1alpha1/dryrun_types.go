@@ -13,7 +13,16 @@ const DryRunAnnotation = "drplacementcontrol.ramendr.openshift.io/dry-run"
 
 // DryRunPhase is the hub-side lifecycle of a test failover, carried in
 // DryRunAnnotation. Absent means no run is in progress and a new one may begin.
-// +kubebuilder:validation:Enum=SettingUp;Reverting;Completed;TearingDown
+//
+// Three of the four values are gerunds naming what Ramen is doing. Ready is an
+// adjective naming a resulting state, because it is the one phase in which
+// Ramen has stopped and nothing further happens without the user.
+//
+// The Enum marker below documents the values; it does not enforce them. This
+// type is never a struct field -- the phase lives in an annotation -- so
+// controller-gen emits it into no CRD schema and the API server validates
+// nothing. Only Ramen writes the annotation, so there is nothing to enforce.
+// +kubebuilder:validation:Enum=SettingUp;Reverting;Ready;TearingDown
 type DryRunPhase string
 
 const (
@@ -25,10 +34,16 @@ const (
 	// and the test cluster is being returned to Secondary.
 	DryRunReverting = DryRunPhase("Reverting")
 
-	// DryRunCompleted means the cycle is done and the test copy is running,
-	// waiting for the user to finish looking at it. Clearing spec.dryRun from
-	// here is what asks for it to be taken down.
-	DryRunCompleted = DryRunPhase("Completed")
+	// DryRunReady means the test copy is built and running, and Ramen is done:
+	// the cluster is back to Secondary and nothing further happens until the
+	// user clears spec.dryRun, which asks for the copy to be taken down.
+	//
+	// Deliberately not "Completed". The orchestration has completed, but the
+	// test has not -- the copy runs until someone takes it down, which is the
+	// whole point. "Completed" also already means two other things here:
+	// ProgressionCompleted sits in the adjacent printer column, and
+	// DryRunBuildCompleted is status.dryRun.state.
+	DryRunReady = DryRunPhase("Ready")
 
 	// DryRunTearingDown means the user has cleared spec.dryRun and the test
 	// copy is being deleted. The annotation is removed once it is gone, which
