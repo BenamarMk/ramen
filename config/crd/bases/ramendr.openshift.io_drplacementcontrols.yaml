@@ -48,6 +48,10 @@ spec:
       name: peer ready
       priority: 2
       type: string
+    - jsonPath: .metadata.annotations.drplacementcontrol\.ramendr\.openshift\.io/dry-run
+      name: dryRun
+      priority: 2
+      type: string
     name: v1alpha1
     schema:
       openAPIV3Schema:

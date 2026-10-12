@@ -302,6 +302,7 @@ type DRPlacementControlStatus struct {
 // +kubebuilder:printcolumn:JSONPath=".status.actionStartTime",name=start time,type=string,priority=2
 // +kubebuilder:printcolumn:JSONPath=".status.actionDuration",name=duration,type=string,priority=2
 // +kubebuilder:printcolumn:JSONPath=".status.conditions[1].status",name=peer ready,type=string,priority=2
+// +kubebuilder:printcolumn:JSONPath=".metadata.annotations.drplacementcontrol\\.ramendr\\.openshift\\.io/dry-run",name=dryRun,type=string,priority=2
 // +kubebuilder:resource:shortName=drpc
 
 // DRPlacementControl is the Schema for the drplacementcontrols API

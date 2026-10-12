@@ -199,6 +199,9 @@ selects on.
 |     | the terminal one, §5.9.2                                             |
 | 38  | Clearing `spec.dryRun` **tears the test copy down**, and Ramen then  |
 |     | removes its own annotation, §5.3.1. Supersedes manual teardown       |
+| 39  | A **`priority=2` `dryRun` printer column** reads the annotation,     |
+|     | not `status.dryRun`, §5.9.3 — the lifecycle is what a passer-by      |
+|     | needs, and it is absent when no test copy exists                     |
 
 ## 4. Current Implementation
 
@@ -1014,6 +1017,51 @@ asks whether these volumes were promoted by a test, and the annotation answers
 that even for a run that never got far enough to write status. Being wrong
 permissively costs a resync that was not needed; being wrong the other way
 leaves volumes diverged, so the two guards should not be unified.
+
+#### 5.9.3 The `dryRun` printer column — [from implementation]
+
+Status told a user nothing they would see. `kubectl get drpc -o wide` on a DRPC
+with a live test copy was indistinguishable from one without: the real workload
+is untouched by design (invariant 3), so every existing column reads exactly as
+it did before the run started. A test copy could sit forgotten in a namespace
+nobody was looking at, holding a retained storage snapshot per PVC.
+
+A `priority=2` printer column named `dryRun` fixes that. It reads the
+annotation, not `status.dryRun`:
+
+```go
+// +kubebuilder:printcolumn:JSONPath=".metadata.annotations.drplacementcontrol\\.ramendr\\.openshift\\.io/dry-run",name=dryRun,type=string,priority=2
+```
+
+Three properties made the annotation the right source. It is the state of record
+(§5.3), so the column cannot disagree with the machine that drives the run. Its
+four values -- `SettingUp`, `Reverting`, `Completed`, `TearingDown` -- are a
+lifecycle rather than the build progress `status.dryRun.state` carries, and
+lifecycle is what a passer-by needs. And it is present for exactly as long as a
+test copy exists, which is the question being asked.
+
+`priority=2` keeps the column out of the default `kubectl get drpc` entirely, so
+a cluster that never runs a test never sees it; under `-o wide` it renders an
+empty cell. Printer columns are declared once on the CRD and cannot be shown
+conditionally -- the API server builds the column list before it reads any
+object -- so an empty cell is the floor.
+
+The escaping is load-bearing and fails silently. Dots in the annotation key have
+to be escaped for the API server's JSONPath parser, and the kubebuilder marker
+needs them doubled to survive controller-gen. A wrong path is still
+syntactically valid, so the API server accepts the CRD and renders an empty cell
+for every DRPC -- the column just quietly stops working. Verified against a real
+API server when it was added (annotated DRPC rendered `SettingUp`, un-annotated
+rendered empty), and pinned since by `TestDRPCDryRunPrinterColumn`, which
+asserts the generated path and ties it back to `DryRunAnnotation`.
+
+The namespaces themselves are deliberately not a column: `namespaceMapping` is a
+map, and no printer column can render one usefully. They stay in
+`status.dryRun`, and are findable by label:
+
+```sh
+kubectl get ns -l ramendr.openshift.io/dry-run-id=<runID>
+```
 
 ### 5.10 Eligibility and pre-flight guards
 
