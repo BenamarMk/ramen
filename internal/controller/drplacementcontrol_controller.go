@@ -687,6 +687,16 @@ func (r *DRPlacementControlReconciler) reconcileDRPCInstance(d *DRPCInstance, lo
 	}
 
 	if requeue {
+		// A caller that paced itself gets a fixed delay. Requeue: true is
+		// rate limited and the item is never forgotten, so a path that stays
+		// "not done" for many reconciles in a row -- a dry run does -- backs
+		// off exponentially to the limiter's ceiling.
+		if d.requeueAfter > 0 {
+			log.Info("Requeing...", "after", d.requeueAfter)
+
+			return ctrl.Result{RequeueAfter: d.requeueAfter}, nil
+		}
+
 		log.Info("Requeing...")
 
 		return ctrl.Result{Requeue: true}, nil

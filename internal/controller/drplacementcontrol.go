@@ -80,6 +80,10 @@ type DRPCInstance struct {
 	mwu                  rmnutil.MWUtil
 	drType               DRType
 	networkMappingRules  *NetworkMappingRules
+
+	// requeueAfter asks for a paced retry instead of the rate limited one.
+	// Only the dry-run path sets it; see RunDryRunFailover.
+	requeueAfter time.Duration
 }
 
 func (d *DRPCInstance) startProcessing() bool {

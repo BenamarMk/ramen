@@ -208,6 +208,9 @@ selects on.
 | 41  | `status.dryRun` **outlives the run** as a trimmed record, §5.9.4,    |
 |     | surfaced as a `lastTested` date column. The annotation cannot carry  |
 |     | this: it gates the next run, and a word has no date                  |
+| 42  | A dry run **paces its own retries** with `RequeueAfter`, §5.9.5 —    |
+|     | `Requeue: true` is rate limited and never forgotten, so a run that   |
+|     | waits for minutes backs off to the limiter's ~16 minute ceiling      |
 
 ## 4. Current Implementation
 
@@ -1151,6 +1154,43 @@ from `dryRunBuild` under a `SettingUp` phase, and `dryRunStatus` is overwritten
 by `dryRunStart` before any new run uses it, so neither needed changing.
 `dryRunTargetCluster` derives from the DRPolicy and never reads status, so a
 stale record cannot retarget a later run.
+
+#### 5.9.5 A dry run has to pace its own retries — [from implementation]
+
+A tear-down finished two minutes in and the DRPC still read `TearingDown` eight
+minutes later. Nothing was stuck: the hub simply was not looking.
+
+`startProcessing` returns "not done" and the reconciler turns that into
+`Result{Requeue: true}`. That is the *rate limited* path -- controller-runtime
+queues it with `RateLimited: true` and never calls `Forget`, so the default
+exponential limiter doubles the delay on every consecutive pass from 5 ms toward
+its 1000 s (~16 minute) ceiling. `RequeueAfter` is the other path: it calls
+`Forget(req)` first, which both resets the backoff and bounds the wait.
+
+Real DR actions never feel this. They finish in a handful of reconciles, and
+anything slow is punctuated by watch events that reset nothing but arrive often
+enough. A dry run is the opposite shape: it holds "not done" continuously from
+`SettingUp` through `Reverting` into `TearingDown`, which is minutes of
+uninterrupted requeues. Roughly eighteen passes is all it takes to reach
+minutes-scale, so by the time the test cluster reports the copy deleted, the hub
+is waking about every sixteen minutes.
+
+`RunDryRunFailover` therefore sets `requeueAfter` whenever it returns without
+finishing, and the reconciler prefers that over `Requeue: true`. The field is
+reinstated from the one Phase 1 deleted, and again only the dry-run path sets
+it, so no real action's timing changes.
+
+The managed cluster had the same fault in one place. `reconcileDryRun` paced its
+three waits with `RequeueAfter = 30s`, but `dryRunTearDown` called `v.requeue()`
+-- the rate limited one -- which is exactly the phase where namespaces take tens
+of seconds to finish terminating. It now uses the same interval as its siblings.
+
+This is the third appearance of one mistake: treating the requeue knobs as
+interchangeable. Phase 5 found `inProgress()` hot-looping on `Requeue: true`
+because it never backs off *enough*; this is the same field failing the opposite
+way, backing off too much. `Requeue: true` means "retry with backoff, this is a
+failure"; `RequeueAfter` means "poll me at this rate". A dry run is always the
+second thing.
 
 ### 5.10 Eligibility and pre-flight guards
 

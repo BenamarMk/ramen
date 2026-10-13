@@ -109,7 +109,29 @@ func (d *DRPCInstance) dryRunWants() bool {
 
 // RunDryRunFailover drives the test failover. It is a state machine over the
 // annotation rather than over spec, so a reconcile can resume it at any point.
+// RunDryRunFailover advances the test failover by one step.
+//
+// It paces its own retries. The DRPC reconciler turns "not done" into
+// Result{Requeue: true}, which is rate limited: controller-runtime never
+// forgets the item on that path, so the delay doubles on every consecutive
+// pass and tops out at the limiter's ~16 minute ceiling. Real DR actions
+// finish in a handful of reconciles and never feel it. A dry run holds "not
+// done" continuously from SettingUp through Reverting into TearingDown --
+// minutes of it -- and by the end the hub is waking only every few minutes,
+// so a tear-down that finished long ago sits unnoticed.
+//
+// RequeueAfter forgets the item first, which both resets the backoff and
+// bounds the wait.
 func (d *DRPCInstance) RunDryRunFailover() (bool, error) {
+	done, err := d.runDryRunFailover()
+	if !done && err == nil {
+		d.requeueAfter = dryRunRequeueInterval
+	}
+
+	return done, err
+}
+
+func (d *DRPCInstance) runDryRunFailover() (bool, error) {
 	const done = true
 
 	phase := d.dryRunPhase()

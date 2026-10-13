@@ -442,6 +442,35 @@ func TestClearDryRunPhaseKeepsTheRecordAcrossTheUpdate(t *testing.T) {
 	}
 }
 
+func TestDryRunPacesItsOwnRetries(t *testing.T) {
+	// The reconciler turns "not done" into Result{Requeue: true}, which is
+	// rate limited and never forgets the item, so the delay doubles on every
+	// consecutive pass and reaches the limiter's ~16 minute ceiling. A dry
+	// run stays "not done" for minutes on end, which is how a tear-down that
+	// finished two minutes in went unnoticed for ten.
+	d, _ := finishedRun(t)
+	d.instance.Status.DryRun = nil // the quickest path that still waits
+
+	if d.requeueAfter != 0 {
+		t.Fatalf("requeueAfter should start unset, got %v", d.requeueAfter)
+	}
+
+	done, err := d.RunDryRunFailover()
+	if err != nil {
+		t.Fatalf("RunDryRunFailover: %v", err)
+	}
+
+	if done {
+		t.Fatal("expected the run to still be waiting")
+	}
+
+	if d.requeueAfter != dryRunRequeueInterval {
+		t.Errorf("requeueAfter = %v, want %v; without it the hub falls back to "+
+			"the rate limited Requeue and backs off exponentially",
+			d.requeueAfter, dryRunRequeueInterval)
+	}
+}
+
 func TestSetVRGDryRunFieldsIsInertOnceTheRunEnded(t *testing.T) {
 	// Status used to be nil'd on teardown, and that nil was what kept this
 	// function -- called from updateVRGOptionalFields on every VRG write,

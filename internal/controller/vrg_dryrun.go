@@ -315,7 +315,12 @@ func (v *VRGInstance) dryRunTearDown() error {
 	}
 
 	if !done {
-		v.requeue()
+		// Paced like every other dry-run wait, and deliberately not
+		// v.requeue(): Requeue: true is rate limited and the item is never
+		// forgotten, so the delay doubles on every pass. Namespaces take
+		// tens of seconds to finish terminating, which is long enough for
+		// that to escalate well past the interval wanted here.
+		v.result.RequeueAfter = dryRunRequeueInterval
 
 		return nil
 	}
