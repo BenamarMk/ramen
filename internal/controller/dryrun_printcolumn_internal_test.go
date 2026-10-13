@@ -28,10 +28,10 @@ import (
 // pins the generated path so a reformatted marker cannot quietly undo it.
 const drpcCRDPath = "../../config/crd/bases/ramendr.openshift.io_drplacementcontrols.yaml"
 
-func dryRunColumn(columns []apiextensions.CustomResourceColumnDefinition,
+func dryRunColumn(columns []apiextensions.CustomResourceColumnDefinition, name string,
 ) *apiextensions.CustomResourceColumnDefinition {
 	for i := range columns {
-		if columns[i].Name == "dryRun" {
+		if columns[i].Name == name {
 			return &columns[i]
 		}
 	}
@@ -63,7 +63,7 @@ func TestDRPCDryRunPrinterColumn(t *testing.T) {
 	}
 
 	for _, version := range crd.Spec.Versions {
-		column := dryRunColumn(version.AdditionalPrinterColumns)
+		column := dryRunColumn(version.AdditionalPrinterColumns, "dryRun")
 		if column == nil {
 			t.Errorf("version %s has no dryRun printer column", version.Name)
 
@@ -80,6 +80,50 @@ func TestDRPCDryRunPrinterColumn(t *testing.T) {
 		// ask for -o wide.
 		if column.Priority != 2 {
 			t.Errorf("version %s dryRun column priority = %d, want 2 (wide only)",
+				version.Name, column.Priority)
+		}
+	}
+}
+
+// lastTested answers "has this DRPC ever been DR tested, and how long ago",
+// which the dryRun column cannot: that one is empty whenever no test copy is
+// live, which is almost always. It reads status.dryRun.completionTime, which
+// outlives the run because dryRunHistory keeps it when the copy is deleted.
+//
+// type=date is the point -- kubectl renders it as a relative age (3d, 412d)
+// rather than a timestamp, which is what makes it readable in a table and
+// useful for judging whether a DR drill is overdue.
+func TestDRPCLastTestedPrinterColumn(t *testing.T) {
+	raw, err := os.ReadFile(drpcCRDPath)
+	if err != nil {
+		t.Fatalf("reading %s: %v", drpcCRDPath, err)
+	}
+
+	crd := &apiextensions.CustomResourceDefinition{}
+	if err := yaml.Unmarshal(raw, crd); err != nil {
+		t.Fatalf("parsing %s: %v", drpcCRDPath, err)
+	}
+
+	for _, version := range crd.Spec.Versions {
+		column := dryRunColumn(version.AdditionalPrinterColumns, "lastTested")
+		if column == nil {
+			t.Errorf("version %s has no lastTested printer column", version.Name)
+
+			continue
+		}
+
+		if column.JSONPath != ".status.dryRun.completionTime" {
+			t.Errorf("version %s lastTested JSONPath = %s, want .status.dryRun.completionTime",
+				version.Name, column.JSONPath)
+		}
+
+		if column.Type != "date" {
+			t.Errorf("version %s lastTested type = %q, want date (kubectl renders a relative age)",
+				version.Name, column.Type)
+		}
+
+		if column.Priority != 2 {
+			t.Errorf("version %s lastTested priority = %d, want 2 (wide only)",
 				version.Name, column.Priority)
 		}
 	}

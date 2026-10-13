@@ -52,6 +52,10 @@ spec:
       name: dryRun
       priority: 2
       type: string
+    - jsonPath: .status.dryRun.completionTime
+      name: lastTested
+      priority: 2
+      type: date
     name: v1alpha1
     schema:
       openAPIV3Schema:

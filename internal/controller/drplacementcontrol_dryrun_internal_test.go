@@ -302,6 +302,170 @@ func TestSetVRGDryRunFieldsIsInertWithoutARun(t *testing.T) {
 	}
 }
 
+// finishedRun is a DRPC whose test copy has just been deleted: the phase is
+// still TearingDown and status still holds everything the run recorded.
+func finishedRun(t *testing.T) (*DRPCInstance, client.Client) {
+	t.Helper()
+
+	scheme := runtime.NewScheme()
+	if err := clientgoscheme.AddToScheme(scheme); err != nil {
+		t.Fatalf("scheme: %v", err)
+	}
+
+	if err := rmn.AddToScheme(scheme); err != nil {
+		t.Fatalf("scheme: %v", err)
+	}
+
+	started := metav1.NewTime(time.Now().Add(-time.Hour))
+	finished := metav1.NewTime(time.Now().Add(-30 * time.Minute))
+
+	drpc := &rmn.DRPlacementControl{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        "disapp",
+			Namespace:   "ramen-ops",
+			Annotations: map[string]string{rmn.DryRunAnnotation: string(rmn.DryRunTearingDown)},
+		},
+		Status: rmn.DRPlacementControlStatus{
+			DryRun: &rmn.DryRunStatus{
+				RunID:                  "e7a1c2f2",
+				TargetCluster:          testTargetCluster,
+				NamespaceMapping:       map[string]string{"workload1": "workload1-test-e7a1c2f2"},
+				State:                  rmn.DryRunBuildCompleted,
+				Message:                "waiting on restore dryrun-disapp-e7a1c2f2-0",
+				StartTime:              &started,
+				CompletionTime:         &finished,
+				ActionAtStart:          rmn.ActionFailover,
+				FailoverClusterAtStart: testTargetCluster,
+			},
+		},
+	}
+
+	// Stored with no status, so an Update that does not defend itself will
+	// pull the empty stored status back over the in-memory one -- which is
+	// exactly how the Status.DryRun nil-deref panic happened in dryRunBuild.
+	stored := drpc.DeepCopy()
+	stored.Status = rmn.DRPlacementControlStatus{}
+
+	c := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(stored).WithStatusSubresource(stored).Build()
+
+	// Read back so the in-memory object carries the stored resourceVersion,
+	// then put the run's status on it the way a reconcile would have.
+	live := &rmn.DRPlacementControl{}
+	if err := c.Get(context.Background(),
+		types.NamespacedName{Name: drpc.Name, Namespace: drpc.Namespace}, live); err != nil {
+		t.Fatalf("reading back the seeded drpc: %v", err)
+	}
+
+	live.Status = drpc.Status
+
+	return &DRPCInstance{
+		ctx:        context.Background(),
+		log:        logr.Discard(),
+		reconciler: &DRPlacementControlReconciler{Client: c},
+		instance:   live,
+	}, c
+}
+
+func TestDryRunHistoryKeepsTheAuditTrail(t *testing.T) {
+	d, _ := finishedRun(t)
+	before := d.instance.Status.DryRun
+
+	got := dryRunHistory(before)
+
+	if got.RunID != before.RunID || got.TargetCluster != before.TargetCluster {
+		t.Errorf("identity lost: runID=%q cluster=%q", got.RunID, got.TargetCluster)
+	}
+
+	if got.StartTime == nil || got.CompletionTime == nil {
+		t.Fatalf("timestamps lost: start=%v completion=%v", got.StartTime, got.CompletionTime)
+	}
+
+	// completionTime is what the lastTested column renders.
+	if !got.CompletionTime.Equal(before.CompletionTime) {
+		t.Errorf("completionTime changed: got %v want %v", got.CompletionTime, before.CompletionTime)
+	}
+
+	if dryRunHistory(nil) != nil {
+		t.Error("dryRunHistory(nil) should be nil")
+	}
+}
+
+func TestDryRunHistoryDropsWhatNoLongerExists(t *testing.T) {
+	d, _ := finishedRun(t)
+
+	got := dryRunHistory(d.instance.Status.DryRun)
+
+	// A stale namespaceMapping would send someone looking for namespaces
+	// that were deleted, and a lingering State would read as a live run.
+	if got.NamespaceMapping != nil || got.Message != "" || got.State != "" {
+		t.Errorf("live fields survived: mapping=%v message=%q state=%q",
+			got.NamespaceMapping, got.Message, got.State)
+	}
+
+	if got.ActionAtStart != "" || got.FailoverClusterAtStart != "" {
+		t.Errorf("pre-emption bookkeeping survived: action=%q cluster=%q",
+			got.ActionAtStart, got.FailoverClusterAtStart)
+	}
+}
+
+func TestClearDryRunPhaseKeepsTheRecordAcrossTheUpdate(t *testing.T) {
+	d, c := finishedRun(t)
+	d.instance.Status.DryRun = dryRunHistory(d.instance.Status.DryRun)
+
+	if err := d.clearDryRunPhase(); err != nil {
+		t.Fatalf("clearDryRunPhase: %v", err)
+	}
+
+	// Absent is what frees the DRPC to run another test.
+	if _, found := d.instance.Annotations[rmn.DryRunAnnotation]; found {
+		t.Error("annotation still present after teardown")
+	}
+
+	persisted := &rmn.DRPlacementControl{}
+	if err := c.Get(context.Background(),
+		types.NamespacedName{Name: "disapp", Namespace: "ramen-ops"}, persisted); err != nil {
+		t.Fatalf("reading back: %v", err)
+	}
+
+	if _, found := persisted.Annotations[rmn.DryRunAnnotation]; found {
+		t.Error("annotation still present on the stored object")
+	}
+
+	// The Update must not take the record with it.
+	if d.instance.Status.DryRun == nil {
+		t.Fatal("the run record was wiped by the Update")
+	}
+
+	if d.instance.Status.DryRun.CompletionTime == nil {
+		t.Error("completionTime lost; lastTested would render empty")
+	}
+}
+
+func TestSetVRGDryRunFieldsIsInertOnceTheRunEnded(t *testing.T) {
+	// Status used to be nil'd on teardown, and that nil was what kept this
+	// function -- called from updateVRGOptionalFields on every VRG write,
+	// real failovers included -- from acting once a run was over. Now that
+	// the record outlives the run, the absent phase has to do that job.
+	//
+	// Seeded dryRun=true so the two behaviors differ: left alone under the
+	// phase guard, forced to false without it.
+	d, _ := finishedRun(t)
+	d.instance.Status.DryRun = dryRunHistory(d.instance.Status.DryRun)
+	delete(d.instance.Annotations, rmn.DryRunAnnotation)
+
+	vrg := &rmn.VolumeReplicationGroup{Spec: rmn.VolumeReplicationGroupSpec{
+		DryRun: true,
+		Action: rmn.VRGActionRelocate,
+	}}
+	d.setVRGDryRunFields(vrg, testTargetCluster)
+
+	if !vrg.Spec.DryRun || vrg.Spec.Action != rmn.VRGActionRelocate {
+		t.Errorf("VRG modified after the run ended: dryRun=%v action=%q",
+			vrg.Spec.DryRun, vrg.Spec.Action)
+	}
+}
+
 func TestMirrorBringsTheTestClusterReportToTheHub(t *testing.T) {
 	// The managed cluster's log is not somewhere a DRPC user looks, so what
 	// the test cluster says has to reach the hub.

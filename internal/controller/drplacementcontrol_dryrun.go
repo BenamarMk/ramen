@@ -190,9 +190,39 @@ func (d *DRPCInstance) dryRunTearDown() (bool, error) {
 		return !done, nil
 	}
 
-	d.instance.Status.DryRun = nil
+	d.instance.Status.DryRun = dryRunHistory(status)
+
+	d.log.Info("Test copy gone; keeping the record of the run",
+		"runID", status.RunID, "cluster", target, "completed", status.CompletionTime)
 
 	return done, d.clearDryRunPhase()
+}
+
+// dryRunHistory reduces a finished run to what is still true once the test
+// copy has been deleted.
+//
+// The alternative was to drop status.dryRun entirely, which lost the only
+// evidence a DRPC had ever been tested. The annotation cannot carry that: it
+// is the gate on starting a second run, so it has to go back to absent, and a
+// bare terminal value would say nothing about *when*. A date is what a DR
+// drill actually needs, and kubectl renders CompletionTime as lastTested.
+//
+// What is dropped describes things that no longer exist. NamespaceMapping
+// names deleted namespaces and would send someone looking for them; Message
+// explained a run in flight; State is build progress for a build that is
+// gone, and a lingering InProgress would read as a live run; the at-start
+// spec snapshot only ever mattered for pre-emption.
+func dryRunHistory(status *rmn.DryRunStatus) *rmn.DryRunStatus {
+	if status == nil {
+		return nil
+	}
+
+	return &rmn.DryRunStatus{
+		RunID:          status.RunID,
+		TargetCluster:  status.TargetCluster,
+		StartTime:      status.StartTime,
+		CompletionTime: status.CompletionTime,
+	}
 }
 
 // refreshVRGAnnotations rewrites a VRG ManifestWork with current annotations
@@ -680,8 +710,12 @@ func (d *DRPCInstance) dryRunMessage(reason string) string {
 // cluster to hand the storage snapshots over to the test namespaces, so the
 // test copy survives the revert.
 func (d *DRPCInstance) setVRGDryRunFields(vrg *rmn.VolumeReplicationGroup, cluster string) {
+	// The phase, not status, is what says a run is live. status.dryRun
+	// outlives the run as the record of it (dryRunHistory), and this is
+	// called from updateVRGOptionalFields on every VRG write -- including
+	// real failovers long after a test finished.
 	status := d.instance.Status.DryRun
-	if status == nil || status.TargetCluster != cluster {
+	if status == nil || status.TargetCluster != cluster || d.dryRunPhase() == "" {
 		return
 	}
 

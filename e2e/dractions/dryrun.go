@@ -266,11 +266,12 @@ func WaitForTestNamespace(ctx types.TestContext, cluster *types.Cluster, name st
 // DryRunRefusedWhileNotCleanedUp checks that a second test failover cannot be
 // started over the first one's leftovers.
 //
-// Ramen never clears the terminal annotation: leaving it is a deliberate user
-// action, and it is the only gate on a repeat run. That matters because every
-// run on a DRPC targets the same namespace names, so a second run over
-// namespaces nobody deleted would adopt the first copy and report success
-// with stale data.
+// The annotation is present for as long as a test copy exists, and that is
+// the only gate on a repeat run. Ramen removes it itself, but only after the
+// copy has been torn down -- so at Ready, with the copy still up, asking for
+// a second run must do nothing. That matters because every run on a DRPC
+// targets the same namespace names, so a second run over namespaces nobody
+// deleted would adopt the first copy and report success with stale data.
 func DryRunRefusedWhileNotCleanedUp(ctx types.TestContext) error {
 	managementNamespace := ctx.ManagementNamespace()
 	name := ctx.Name()

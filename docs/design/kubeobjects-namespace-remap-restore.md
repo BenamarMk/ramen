@@ -205,6 +205,9 @@ selects on.
 | 40  | The terminal phase is **`Ready`**, not `Completed`, §5.3 — the       |
 |     | orchestration finished but the test did not, and `Completed`         |
 |     | already names two other things in this feature                       |
+| 41  | `status.dryRun` **outlives the run** as a trimmed record, §5.9.4,    |
+|     | surfaced as a `lastTested` date column. The annotation cannot carry  |
+|     | this: it gates the next run, and a word has no date                  |
 
 ## 4. Current Implementation
 
@@ -633,11 +636,15 @@ gives the copy back. Nothing is left for the user to tidy, and a second run
 cannot start over the first one's leftovers, because the leftovers go before the
 annotation does.
 
-Three details that are not obvious:
+Four details that are not obvious:
 
 - **The test cluster does the deleting.** The namespaces are there, not on the
   hub. It reports being finished by emptying its own `status.dryRun`, the same
   field that says a copy exists.
+- **Only the managed cluster empties its status; the hub keeps a record.** The
+  VRG's nil *is* the done signal the hub waits on, so that one has to go. The
+  hub instead trims its own `status.dryRun` to the run's identity and timestamps
+  — §5.9.4 — which is what `lastTested` reads.
 - **The phase has to be pushed to a Secondary VRG.** By tear-down time the test
   cluster has been demoted, and neither `ensureVRGManifestWork` (which refuses a
   VRG that is not Primary) nor `updateVRGState` (which returns early when the
@@ -1084,6 +1091,66 @@ map, and no printer column can render one usefully. They stay in
 ```sh
 kubectl get ns -l ramendr.openshift.io/dry-run-id=<runID>
 ```
+
+#### 5.9.4 The run outlives itself as a record — [from implementation]
+
+Teardown used to set `status.dryRun = nil`, which destroyed the only evidence a
+DRPC had ever been tested. An empty `dryRun` column then meant two very
+different things — never tested, and tested and cleaned up — with no way to tell
+them apart.
+
+The obvious fix is to leave a terminal value in the annotation. It does not
+work. The annotation is the gate on starting a second run (`dryRunWants` treats
+absent as "a new run may begin" and everything else as "a run is under way"), so
+it has to return to absent. And a bare word carries no date: for a DR drill
+"tested at some point in this DRPC's life" is nearly worthless, since the
+question is always whether the last test was recent enough.
+
+So the record stays in status, where history belongs, and `dryRunHistory` trims
+it to what is still true once the copy is gone:
+
+| Field                    | Kept | Why                                     |
+| ------------------------ | ---- | --------------------------------------- |
+| `RunID`, `TargetCluster` | yes  | which run, and where it ran             |
+| `StartTime`              | yes  | how long the run took                   |
+| `CompletionTime`         | yes  | **the answer to "when"** — `lastTested` |
+| `NamespaceMapping`       | no   | names namespaces that were deleted      |
+| `Message`                | no   | explained a run in flight               |
+| `State`                  | no   | a lingering `InProgress` reads as live  |
+| `ActionAtStart` etc.     | no   | pre-emption bookkeeping only            |
+
+A second `priority=2` column surfaces it:
+
+```go
+// +kubebuilder:printcolumn:JSONPath=".status.dryRun.completionTime",name=lastTested,type=date,priority=2
+```
+
+`type=date` is the point — kubectl renders a relative age, not a timestamp:
+
+```
+PEER READY   DRYRUN      LASTTESTED
+True         SettingUp   412d
+True                     3d
+True
+```
+
+Blank `lastTested` means never tested; `dryRun` stays empty unless a copy is
+live right now. Each column answers one question, and `dryRun` keeps the
+empty-by-default property that makes it an attention signal.
+
+One consequence: a new run replaces the record at `dryRunStart`, so `lastTested`
+goes blank while a test is in flight and reappears when it completes. The
+`dryRun` column says why.
+
+**This changed an invariant.** `status.dryRun != nil` used to imply a live run,
+and `setVRGDryRunFields` relied on it — it is called from
+`updateVRGOptionalFields` on *every* VRG write, real failovers included, and the
+nil was all that stopped it acting long after a test finished. It now checks the
+phase instead. `dryRunShouldYield` reads the same status but is reached only
+from `dryRunBuild` under a `SettingUp` phase, and `dryRunStatus` is overwritten
+by `dryRunStart` before any new run uses it, so neither needed changing.
+`dryRunTargetCluster` derives from the DRPolicy and never reads status, so a
+stale record cannot retarget a later run.
 
 ### 5.10 Eligibility and pre-flight guards
 
